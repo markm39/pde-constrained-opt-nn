@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+*.log
+*.tmp
+*.cache
+output/
+results/
+checkpoints/
+
+# Data files
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+
+# Plots and figures
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+*.eps
+
+# Except for documentation images
+!docs/*.png
+!docs/*.jpg
+!docs/*.pdf
+
+# Model weights
+*.pth
+*.pt
+*.ckpt
+*.weights
+
+# Tensorboard
+runs/
+logs/
+tensorboard/
+
+# Environment files
+.env
+.env.local
+
+# System files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover

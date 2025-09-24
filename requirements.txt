@@ -1,0 +1,10 @@
+# JAX and Flax requirements for PDE solver
+jax==0.4.13
+jaxlib==0.4.13
+flax==0.7.0
+optax==0.1.5
+matplotlib>=3.5.0
+numpy>=1.24.0,<2.0
+scipy>=1.10.0,<1.13
+jupyter
+ipykernel
