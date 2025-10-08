@@ -275,42 +275,6 @@ class AdvectionDiffusion1D(PDEProblem):
         return jnp.sin(jnp.pi * (X - self.v * T_mesh)) * jnp.exp(-jnp.pi**2 * self.D * T_mesh)
 
 
-class ThermalFin2D(PDEProblem):
-    """
-    2D Thermal fin problem (Example 3.5 from paper).
-    -�(�bu) = 0 in �b
-    with different conductivities �b in subdomains.
-    """
-
-    def __init__(self):
-        super().__init__(
-            name="2D Thermal Fin",
-            description="Heat dissipation in thermal fin with subdomains",
-            domain=(0.0, 6.0, 0.0, 0.41),
-            boundary_conditions="Mixed (Neumann + Robin)",
-            parameters={}
-        )
-
-        # True parameters from paper
-        self.kappa_true = jnp.array([0.1, 8.37317, 6.57228, 0.466517, 1.88354])
-        self.Bi_true = 0.01  # Biot number
-
-    def subdomain_mask(self, x: jnp.ndarray, y: jnp.ndarray, subdomain_id: int) -> jnp.ndarray:
-        """Create mask for subdomain i."""
-        X, Y = jnp.meshgrid(x, y, indexing='ij')
-
-        if subdomain_id == 0:
-            # Central fin
-            mask = (X >= 2.5) & (X <= 3.5) & (Y >= 0.0) & (Y <= 4.0)
-        else:
-            # Side fins (1-4)
-            y_min = (subdomain_id - 0.25)
-            y_max = subdomain_id
-            mask = ((X >= 0.0) & (X < 2.5) | (X > 3.5) & (X <= 6.0)) & (Y >= y_min) & (Y <= y_max)
-
-        return mask
-
-
 # Factory function to get problem by name
 def get_problem(problem_name: str, **kwargs) -> PDEProblem:
     """
@@ -331,7 +295,6 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'nonlinear-heat-2d': NonlinearHeat2D,
         'wave-1d': WaveEquation1D,
         'advection-diffusion-1d': AdvectionDiffusion1D,
-        'thermal-fin-2d': ThermalFin2D,
     }
 
     if problem_name not in problems:

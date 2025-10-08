@@ -294,60 +294,6 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         return params, losses, force_final.flatten(), u_final.flatten()
 
 
-class Example35_ThermalFin_ParameterEstimation(OptimizationExample):
-    """Example 3.5: 2D Thermal fin parameter estimation."""
-
-    def __init__(self):
-        super().__init__(
-            name="Example 3.5: Thermal Fin Parameter Estimation",
-            problem_name="thermal-fin-2d",
-            solver_type="poisson",
-            discretization="fem",
-            optimization_type="parameter",
-            grid_params={"nx": 60, "ny": 41},
-            optimizer_config={"learning_rate": 0.01, "optimizer": "rprop"},
-            regularization=0.1
-        )
-
-    def run(self, max_iter: int = 100):
-        """Run parameter estimation for thermal fin."""
-        # This is a simplified version - full implementation would require
-        # more complex subdomain handling
-        print("Thermal fin example - simplified implementation")
-
-        # True parameters from paper
-        mu_true = jnp.array([0.1, 8.37317, 6.57228, 0.466517, 1.88354, 0.01])
-        mu_ref = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.1])
-        mu_guess = 0.5 * jnp.ones(6)
-
-        def loss_fn(mu):
-            # Simplified loss - actual would solve thermal fin PDE
-            diff = mu - mu_true
-            data_loss = jnp.sum(diff**2)
-            reg_loss = 0.1 * jnp.sum(((mu - mu_ref) / mu_ref)**2)
-            return data_loss + reg_loss
-
-        # Optimization with constraints
-        optimizer = optax.adam(self.optimizer_config['learning_rate'])
-        opt_state = optimizer.init(mu_guess)
-
-        losses = []
-        for i in range(max_iter):
-            loss, grads = jax.value_and_grad(loss_fn)(mu_guess)
-            losses.append(float(loss))
-            updates, opt_state = optimizer.update(grads, opt_state)
-            mu_guess = optax.apply_updates(mu_guess, updates)
-
-            # Apply constraints
-            mu_guess = jnp.clip(mu_guess.at[:5].set(jnp.clip(mu_guess[:5], 0.1, 10.0)))
-            mu_guess = mu_guess.at[5].set(jnp.clip(mu_guess[5], 0.01, 1.0))
-
-            if i % 20 == 0:
-                print(f"Iter {i}: Loss = {loss:.6e}")
-
-        return mu_guess, losses
-
-
 class Example36_NonlinearHeat2D(OptimizationExample):
     """Example 3.6: 2+1D Nonlinear heat equation with neural network force."""
 
@@ -519,7 +465,6 @@ def get_example(example_name: str, **kwargs):
         'example-3.1': Example31_Poisson1D_ScalarForce,
         'example-3.2': Example32_Poisson1D_VectorForce,
         'example-3.3': Example33_HeatEquation_ForceNN,
-        'example-3.5': Example35_ThermalFin_ParameterEstimation,
         'example-3.6': Example36_NonlinearHeat2D,
     }
 
