@@ -177,11 +177,19 @@ class NonlinearHeat2D(PDEProblem):
         self.T = T
 
     def source_term(self, x: jnp.ndarray, y: jnp.ndarray, t: float) -> jnp.ndarray:
-        """f(x,y,t) = -2te^(t�) + e^t*sin(�x)sin(�y) + e^(2t�) + 2��e^(t�)"""
+        """
+        Source term for PDE: ∂u/∂t - Δu + u² = f
+        With u(x,y,t) = exp(t-t²)sin(πx)sin(πy)
+        f = (1-2t)exp(t-t²)sin(πx)sin(πy) + 2π²exp(t-t²)sin(πx)sin(πy) + exp(2(t-t²))sin²(πx)sin²(πy)
+        """
         X, Y = jnp.meshgrid(x, y, indexing='ij')
-        f = (-2.0 * t * jnp.exp(t**2) + jnp.exp(t) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y) +
-             jnp.exp(2.0 * t**2) * jnp.exp(-2.0 * t**2 + t) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y) +
-             2.0 * jnp.pi**2 * jnp.exp(t**2))
+        sin_term = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+        exp_term = jnp.exp(t - t**2)
+
+        # f = ∂u/∂t - Δu + u²
+        f = ((1.0 - 2.0 * t) * exp_term * sin_term +  # ∂u/∂t
+             2.0 * jnp.pi**2 * exp_term * sin_term +   # -Δu
+             jnp.exp(2.0 * (t - t**2)) * sin_term**2)  # u²
         return f
 
     def initial_condition(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:

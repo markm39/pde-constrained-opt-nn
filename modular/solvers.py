@@ -164,6 +164,72 @@ class HeatEquationCrankNicolson(SpaceTimeSolver):
         return system
 
 
+class NonlinearHeat2DCrankNicolson:
+    """
+    Crank-Nicolson solver for 2+1D nonlinear heat equation with quadratic nonlinearity.
+
+    PDE: ∂u/∂t - Δu + u² = f(x,y,t)
+
+    Uses Newton's method for implicit time-stepping.
+    """
+
+    def __init__(self, nx: int, ny: int, nt: int, Lx: float = 1.0, Ly: float = 1.0, T: float = 1.0):
+        """
+        Initialize 2D nonlinear heat equation solver.
+
+        Args:
+            nx: Number of spatial points in x direction (interior points)
+            ny: Number of spatial points in y direction (interior points)
+            nt: Number of time steps
+            Lx: Spatial domain length in x
+            Ly: Spatial domain length in y
+            T: Temporal domain length
+        """
+        self.nx = nx
+        self.ny = ny
+        self.nt = nt
+        self.Lx = Lx
+        self.Ly = Ly
+        self.T = T
+
+        # Grid spacing
+        self.hx = Lx / (nx + 1)
+        self.hy = Ly / (ny + 1)
+        self.k = T / nt
+
+        # Create grids (interior points only)
+        self.x_grid = jnp.linspace(self.hx, Lx - self.hx, nx)
+        self.y_grid = jnp.linspace(self.hy, Ly - self.hy, ny)
+        self.t_grid = jnp.linspace(self.k, T, nt)
+
+        # Create 2D Laplacian matrix
+        self.K = self.create_laplacian_2d()
+
+    def create_laplacian_2d(self) -> jnp.ndarray:
+        """
+        Create 2D Laplacian matrix using finite differences.
+        Returns matrix of size (nx*ny, nx*ny) for the flattened 2D grid.
+        """
+        # 1D Laplacian components
+        diag_x = -2.0 / (self.hx**2)
+        off_x = 1.0 / (self.hx**2)
+        diag_y = -2.0 / (self.hy**2)
+        off_y = 1.0 / (self.hy**2)
+
+        # Build 2D Laplacian using Kronecker products
+        # Laplacian = I_y ⊗ D_x + D_y ⊗ I_x
+        Dx = jnp.diag(diag_x * jnp.ones(self.nx)) + jnp.diag(off_x * jnp.ones(self.nx-1), 1) + jnp.diag(off_x * jnp.ones(self.nx-1), -1)
+        Dy = jnp.diag(diag_y * jnp.ones(self.ny)) + jnp.diag(off_y * jnp.ones(self.ny-1), 1) + jnp.diag(off_y * jnp.ones(self.ny-1), -1)
+
+        Ix = jnp.eye(self.nx)
+        Iy = jnp.eye(self.ny)
+
+        # 2D Laplacian (negative definite form: -Δ has positive eigenvalues)
+        K = jnp.kron(Iy, Dx) + jnp.kron(Dy, Ix)
+
+        return K
+
+
 class WaveEquationFD(SpaceTimeSolver):
     """Finite difference solver for 1+1D wave equation."""
 
@@ -386,6 +452,7 @@ def get_solver(problem_type: str, discretization: str, **kwargs):
         ('heat', 'fd'): HeatEquationFD,
         ('heat', 'fem'): HeatEquationFEM,
         ('heat', 'crank-nicolson'): HeatEquationCrankNicolson,
+        ('nonlinear-heat-2d', 'crank-nicolson'): NonlinearHeat2DCrankNicolson,
         ('wave', 'fd'): WaveEquationFD,
         ('poisson', 'fd'): Poisson1DFD,
         ('poisson', '2d-fd'): PoissonFD,

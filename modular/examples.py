@@ -174,12 +174,12 @@ class Example32_Poisson1D_VectorForce(OptimizationExample):
 class Example33_HeatEquation_ForceNN(OptimizationExample):
     """Example 3.3: 1+1D Heat equation with neural network force."""
 
-    def __init__(self, zero_ic: bool = True):
+    def __init__(self, zero_ic: bool = True, discretization: str = "fd"):
         super().__init__(
-            name="Example 3.3: Heat Equation with NN Force",
+            name=f"Example 3.3: Heat Equation with NN Force ({discretization.upper()})",
             problem_name="heat-1d",
             solver_type="heat",
-            discretization="fd",  # Use FD to get create_spatial_matrix()
+            discretization=discretization,  # Can be 'fd', 'fem', or 'crank-nicolson'
             optimization_type="force",
             grid_params={"nx": 149, "nt": 50},  # Match working notebook: nh=150 → nx=149
             optimizer_config={"learning_rate": 3e-3, "optimizer": "adam"},  # Match working notebook
@@ -348,6 +348,161 @@ class Example35_ThermalFin_ParameterEstimation(OptimizationExample):
         return mu_guess, losses
 
 
+class Example36_NonlinearHeat2D(OptimizationExample):
+    """Example 3.6: 2+1D Nonlinear heat equation with neural network force."""
+
+    def __init__(self, zero_ic=None, **kwargs):
+        # Accept zero_ic for compatibility but don't use it
+        super().__init__(
+            name="Example 3.6: 2+1D Nonlinear Heat Equation",
+            problem_name="nonlinear-heat-2d",
+            solver_type="nonlinear-heat-2d",
+            discretization="crank-nicolson",
+            optimization_type="force",
+            grid_params={"nx": 30, "ny": 30, "nt": 50},  # 2D spatial grid + time
+            optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
+            regularization=1e-4
+        )
+
+    def run(self, max_iter: int = 2000):
+        """Run the optimization with neural network using time-stepping for nonlinear PDE."""
+        from jax import lax
+        import jax.scipy.linalg as jsp
+
+        problem = get_problem(self.problem_name)
+        solver = get_solver(self.solver_type, self.discretization,
+                          nx=self.grid_params['nx'], ny=self.grid_params['ny'],
+                          nt=self.grid_params['nt'])
+
+        # Grid setup
+        x_grid = solver.x_grid
+        y_grid = solver.y_grid
+        t_grid = solver.t_grid
+        k = solver.k  # Time step
+
+        # Get the 2D Laplacian matrix
+        K = solver.K  # (nx*ny, nx*ny)
+        n_spatial = solver.nx * solver.ny
+
+        # Initial condition u0(x,y) on the 2D grid (flattened to 1D vector)
+        X, Y = jnp.meshgrid(x_grid, y_grid, indexing='ij')
+        u0_2d = problem.initial_condition(x_grid, y_grid)
+        u0 = u0_2d.flatten()  # Shape: (nx*ny,)
+
+        # Target solution (full trajectory)
+        # u_target[i, j, n] = u(x_i, y_j, t_n)
+        u_target_3d = jnp.stack([problem.analytical_solution(x_grid, y_grid, t)
+                                  for t in t_grid], axis=-1)  # (nx, ny, nt)
+        u_target = u_target_3d.reshape(n_spatial, solver.nt)  # (nx*ny, nt)
+
+        # Initialize neural network (NN input: [x, y, t] → output: f(x,y,t))
+        model = create_neural_network([256, 256], 'tanh')
+        key = jax.random.PRNGKey(42)
+        dummy = jnp.zeros((1, 3))  # 3 inputs: x, y, t
+        params = model.init(key, dummy)
+
+        # Normalize coordinates
+        x_norm = 2.0 * x_grid / solver.Lx - 1.0
+        y_norm = 2.0 * y_grid / solver.Ly - 1.0
+        t_norm = 2.0 * t_grid / solver.T - 1.0
+
+        # Create meshgrid for spatial coordinates
+        X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
+        xy_flat = jnp.stack([X_norm.flatten(), Y_norm.flatten()], axis=1)  # (nx*ny, 2)
+
+        def newton_solve(u_guess, rhs, max_iter=10):
+            """
+            Solve nonlinear system using Newton's method:
+            R(u) = (1/k)*u - Δu + u² - rhs = 0
+            """
+            def residual(u):
+                return (1.0/k) * u - K @ u + u**2 - rhs
+
+            def jacobian(u):
+                # J = (1/k)*I - K + 2*diag(u)
+                return (1.0/k) * jnp.eye(n_spatial) - K + 2.0 * jnp.diag(u)
+
+            def newton_step(i, u):
+                J = jacobian(u)
+                R = residual(u)
+                delta_u = jnp.linalg.solve(J, -R)
+                return u + delta_u
+
+            # Run fixed number of Newton iterations (JAX-compatible)
+            u = lax.fori_loop(0, max_iter, newton_step, u_guess)
+            return u
+
+        def forward_with_nn(params):
+            """Time-stepping forward pass with NN forcing and nonlinear solve."""
+            def step(u_prev, t_n_norm):
+                # Evaluate NN at all spatial points for this time step
+                xyt = jnp.concatenate([xy_flat, jnp.full((n_spatial, 1), t_n_norm)], axis=1)
+                f_n = model.apply(params, xyt)
+
+                # Crank-Nicolson with nonlinearity:
+                # (1/k)*u_{n+1} - Δu_{n+1} + u_{n+1}² = (1/k)*u_n + Δu_n - u_n² + f_{n+1/2}
+                # For simplicity, treat nonlinearity implicitly on RHS:
+                # RHS = (1/k)*u_n + Δu_n - u_n² + f_n
+                rhs = (1.0/k) * u_prev + K @ u_prev - u_prev**2 + f_n
+
+                # Solve nonlinear system with Newton's method
+                u_next = newton_solve(u_prev, rhs)
+
+                return u_next, (u_next, f_n)
+
+            # Scan over time
+            _, (U_seq, F_seq) = lax.scan(step, u0, t_norm)
+            return U_seq, F_seq  # U_seq: (nt, nx*ny), F_seq: (nt, nx*ny)
+
+        @jax.jit
+        def loss_fn(params):
+            U_pred, F_pred = forward_with_nn(params)
+
+            # MSE loss
+            Nu = u_target.size
+            data_loss = jnp.sum((U_pred.T - u_target)**2) / Nu  # U_pred is (nt, nx*ny), u_target is (nx*ny, nt)
+            reg_loss = self.regularization * jnp.mean(F_pred**2)
+
+            return data_loss + reg_loss, (data_loss, reg_loss)
+
+        # Optimizer
+        lr_schedule = optax.exponential_decay(
+            init_value=self.optimizer_config['learning_rate'],
+            transition_steps=max_iter,
+            decay_rate=0.9
+        )
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adam(lr_schedule)
+        )
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        print(f"Using Crank-Nicolson with Newton's method for nonlinear heat equation")
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+
+            if i % 50 == 0:
+                print(f"ep {i:4d} | L={loss:.6f} | mis={data_loss:.6f} | regF={reg_loss:.6f}")
+
+        # Get final predictions
+        U_final, F_final = forward_with_nn(params)
+
+        # Convert back to (nx, ny, nt) for compatibility
+        u_final = U_final.T.reshape(solver.nx, solver.ny, solver.nt)  # (nx, ny, nt)
+        force_final = F_final.T.reshape(solver.nx, solver.ny, solver.nt)  # (nx, ny, nt)
+
+        return params, losses, force_final.flatten(), u_final.flatten()
+
+
 # Factory function to get example by name
 def get_example(example_name: str, **kwargs):
     """
@@ -365,6 +520,7 @@ def get_example(example_name: str, **kwargs):
         'example-3.2': Example32_Poisson1D_VectorForce,
         'example-3.3': Example33_HeatEquation_ForceNN,
         'example-3.5': Example35_ThermalFin_ParameterEstimation,
+        'example-3.6': Example36_NonlinearHeat2D,
     }
 
     if example_name not in examples:
