@@ -57,7 +57,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
 class Example31_Poisson1D_ScalarForce(OptimizationExample):
     """Example 3.1: 1D Poisson with scalar force estimation."""
 
-    def __init__(self):
+    def __init__(self, zero_ic=None, **kwargs):
         super().__init__(
             name="Example 3.1: 1D Poisson Scalar Force",
             problem_name="poisson-1d-scalar",
@@ -112,13 +112,17 @@ class Example31_Poisson1D_ScalarForce(OptimizationExample):
             if loss < 1e-6:
                 break
 
-        return f_guess[0], losses
+        # Compute final solution
+        force_final = f_guess[0] * jnp.ones(self.grid_params['nx'])
+        u_final = jnp.linalg.solve(A, force_final)
+
+        return f_guess[0], losses, u_final
 
 
 class Example32_Poisson1D_VectorForce(OptimizationExample):
     """Example 3.2: 1D Poisson with vector force estimation."""
 
-    def __init__(self):
+    def __init__(self, zero_ic=None, **kwargs):
         super().__init__(
             name="Example 3.2: 1D Poisson Vector Force",
             problem_name="poisson-1d-vector",
@@ -168,7 +172,10 @@ class Example32_Poisson1D_VectorForce(OptimizationExample):
             if i % 200 == 0:
                 print(f"Iter {i}: Loss = {loss:.6e}")
 
-        return f_guess, losses
+        # Compute final solution
+        u_final = jnp.linalg.solve(A, f_guess)
+
+        return f_guess, losses, u_final
 
 
 class Example33_HeatEquation_ForceNN(OptimizationExample):

@@ -449,7 +449,7 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             if isinstance(force, (int, float, jnp.ndarray)) and jnp.size(force) == 1:
                 # Scalar force (Example 3.1)
                 f_pred = jnp.full(nx, float(force))
-                f_true = jnp.full(nx, problem.f)
+                f_true = jnp.full(nx, problem.force_value)
             else:
                 # Vector force
                 f_pred = force.reshape(nx)
