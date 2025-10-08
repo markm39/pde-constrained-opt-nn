@@ -42,9 +42,9 @@ class HeatEquationFD(SpaceTimeSolver):
     """Finite difference solver for 1+1D heat equation using Kronecker products."""
 
     def create_spatial_matrix(self) -> jnp.ndarray:
-        """Create 1D Laplacian matrix K_h with homogeneous Dirichlet BCs."""
-        diag_main = -2.0 * jnp.ones(self.nx) / (self.h**2)
-        diag_off = jnp.ones(self.nx-1) / (self.h**2)
+        """Create 1D Laplacian matrix K_h with homogeneous Dirichlet BCs (positive definite form)."""
+        diag_main = 2.0 * jnp.ones(self.nx) / (self.h**2)  # POSITIVE (matches working notebook)
+        diag_off = -1.0 * jnp.ones(self.nx-1) / (self.h**2)  # NEGATIVE (matches working notebook)
         K = jnp.diag(diag_main) + jnp.diag(diag_off, 1) + jnp.diag(diag_off, -1)
         return K
 
@@ -61,7 +61,7 @@ class HeatEquationFD(SpaceTimeSolver):
         I_k = jnp.eye(self.nt)
         I_h = jnp.eye(self.nx)
 
-        # A_kh = I_k — (1/k*I_h + K_h) - 1/k*S_k — I_h
+        # A_kh = I_k ï¿½ (1/k*I_h + K_h) - 1/k*S_k ï¿½ I_h
         term1 = jnp.kron(I_k, (1.0/self.k)*I_h + K_h)
         term2 = jnp.kron((1.0/self.k)*S_k, I_h)
         A_kh = term1 - term2
@@ -74,13 +74,21 @@ class HeatEquationFEM(SpaceTimeSolver):
     def create_fem_matrices(self) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """Create FEM mass and stiffness matrices for linear elements."""
         # Mass matrix (linear elements)
-        mass_diag = self.h * jnp.array([2.0, 4.0] + [4.0] * (self.nx-2) + [2.0]) / 6.0
-        mass_off = self.h * jnp.ones(self.nx-1) / 6.0
+        mass_diag = (self.h / 6.0) * jnp.concatenate([
+            jnp.array([2.0, 4.0]),
+            jnp.ones(max(0, self.nx-3)) * 4.0,
+            jnp.array([2.0]) if self.nx > 2 else jnp.array([])
+        ])
+        mass_off = (self.h / 6.0) * jnp.ones(self.nx-1)
         M = jnp.diag(mass_diag) + jnp.diag(mass_off, 1) + jnp.diag(mass_off, -1)
 
         # Stiffness matrix (linear elements)
-        stiff_diag = jnp.array([1.0, 2.0] + [2.0] * (self.nx-2) + [1.0]) / self.h
-        stiff_off = -jnp.ones(self.nx-1) / self.h
+        stiff_diag = (1.0 / self.h) * jnp.concatenate([
+            jnp.array([1.0, 2.0]),
+            jnp.ones(max(0, self.nx-3)) * 2.0,
+            jnp.array([1.0]) if self.nx > 2 else jnp.array([])
+        ])
+        stiff_off = -(1.0 / self.h) * jnp.ones(self.nx-1)
         K = jnp.diag(stiff_diag) + jnp.diag(stiff_off, 1) + jnp.diag(stiff_off, -1)
 
         return M, K
@@ -94,7 +102,7 @@ class HeatEquationFEM(SpaceTimeSolver):
         T_matrix = (jnp.diag(jnp.ones(self.nt)) -
                    jnp.diag(jnp.ones(self.nt-1), -1)) / self.k
 
-        # Space-time system: T — M + I_t — K
+        # Space-time system: T ï¿½ M + I_t ï¿½ K
         I_t = jnp.eye(self.nt)
         A_fem = jnp.kron(T_matrix, M) + jnp.kron(I_t, K)
         return A_fem
@@ -219,6 +227,39 @@ class WaveEquationFD(SpaceTimeSolver):
         return system
 
 
+class Poisson1DFD:
+    """Finite difference solver for 1D Poisson equation."""
+
+    def __init__(self, nx: int, L: float = 1.0, **kwargs):
+        """
+        Initialize 1D Poisson solver.
+
+        Args:
+            nx: Number of grid points
+            L: Domain length
+        """
+        self.nx = nx
+        self.L = L
+        self.h = L / (nx + 1)
+
+        # Create grid
+        self.x_grid = jnp.linspace(self.h, L - self.h, nx)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def create_system_matrix(self) -> jnp.ndarray:
+        """Create 1D Laplacian matrix."""
+        diag_main = -2.0 * jnp.ones(self.nx) / (self.h**2)
+        diag_off = jnp.ones(self.nx-1) / (self.h**2)
+        A = jnp.diag(diag_main) + jnp.diag(diag_off, 1) + jnp.diag(diag_off, -1)
+        return A
+
+    def solve(self, force_vec: jnp.ndarray, A: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+        """Solve the 1D Poisson equation."""
+        if A is None:
+            A = self.create_system_matrix()
+        return jnp.linalg.solve(A, force_vec)
+
+
 class PoissonFD:
     """Finite difference solver for 2D Poisson equation."""
 
@@ -256,7 +297,7 @@ class PoissonFD:
               jnp.diag(jnp.ones(self.ny-1), 1) +
               jnp.diag(jnp.ones(self.ny-1), -1)) / self.hy**2
 
-        # 2D Laplacian: Kx — I_y + I_x — Ky
+        # 2D Laplacian: Kx ï¿½ I_y + I_x ï¿½ Ky
         I_x = jnp.eye(self.nx)
         I_y = jnp.eye(self.ny)
 
@@ -346,7 +387,8 @@ def get_solver(problem_type: str, discretization: str, **kwargs):
         ('heat', 'fem'): HeatEquationFEM,
         ('heat', 'crank-nicolson'): HeatEquationCrankNicolson,
         ('wave', 'fd'): WaveEquationFD,
-        ('poisson', 'fd'): PoissonFD,
+        ('poisson', 'fd'): Poisson1DFD,
+        ('poisson', '2d-fd'): PoissonFD,
         ('advection-diffusion', 'fd'): AdvectionDiffusionFD,
     }
 

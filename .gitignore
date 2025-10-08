@@ -80,3 +80,17 @@ htmlcov/
 .coverage.*
 coverage.xml
 *.cover
+
+# JAX/XLA compilation cache
+__xla_cache__/
+xla_dumped_computations/
+
+# Jupyter notebook outputs (keep clean notebooks in repo)
+*.ipynb[_output]
+
+# macOS
+._*
+
+# Temporary files from examples
+plots/
+tmp/

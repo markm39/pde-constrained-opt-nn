@@ -179,76 +179,119 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             name="Example 3.3: Heat Equation with NN Force",
             problem_name="heat-1d",
             solver_type="heat",
-            discretization="fem",
+            discretization="fd",  # Use FD to get create_spatial_matrix()
             optimization_type="force",
-            grid_params={"nx": 32, "nt": 32},
-            optimizer_config={"learning_rate": 1e-3, "optimizer": "adamw"},
-            regularization=1e-6
+            grid_params={"nx": 149, "nt": 50},  # Match working notebook: nh=150 → nx=149
+            optimizer_config={"learning_rate": 3e-3, "optimizer": "adam"},  # Match working notebook
+            regularization=1e-5  # Match working notebook
         )
         self.zero_ic = zero_ic
 
     def run(self, max_iter: int = 2000):
-        """Run the optimization with neural network."""
+        """Run the optimization with neural network using TIME-STEPPING (matches working notebook!)."""
+        from jax import lax
+        import jax.scipy.linalg as jsp
+
         problem = get_problem(self.problem_name, zero_ic=self.zero_ic)
         solver = get_solver(self.solver_type, self.discretization,
                           nx=self.grid_params['nx'], nt=self.grid_params['nt'])
 
-        # Create system matrix
-        A_fem = solver.create_system_matrix()
-
-        # Target solution
+        # Grid setup
         x_grid = solver.x_grid
         t_grid = solver.t_grid
-        u_target = problem.analytical_solution(x_grid, t_grid)
-        u_target_vec = u_target.flatten()
+        k = solver.k  # Time step
 
-        # Create input coordinates for neural network
-        coords = []
-        for i in range(len(x_grid)):
-            for j in range(len(t_grid)):
-                coords.append([x_grid[i], t_grid[j]])
-        input_coords = jnp.array(coords)
+        # Create backward Euler matrix for time-stepping
+        # A = (1/k)*I + K where K is spatial Laplacian
+        K_h = solver.create_spatial_matrix()
+        A_be = (1.0/k) * jnp.eye(solver.nx) + K_h
+        L_be = jnp.linalg.cholesky(A_be)
+
+        def chol_solve(L, b):
+            y = jsp.solve_triangular(L, b, lower=True)
+            u = jsp.solve_triangular(L.T, y, lower=False)
+            return u
+
+        # Target solution (full trajectory)
+        u_target = problem.analytical_solution(x_grid, t_grid)  # (nx, nt)
+
+        # Initial condition
+        u0 = jnp.zeros(solver.nx) if self.zero_ic else jnp.sin(jnp.pi * x_grid)
 
         # Initialize neural network
         model = create_neural_network([256, 256], 'tanh')
         key = jax.random.PRNGKey(42)
-        params = model.init(key, input_coords)
+        dummy = jnp.zeros((1, 2))
+        params = model.init(key, dummy)
+
+        # Normalize coordinates
+        x_norm = 2.0 * x_grid - 1.0
+        t_norm = 2.0 * t_grid / solver.T - 1.0
+
+        def forward_with_nn(params):
+            """Time-stepping forward pass with NN forcing."""
+            def step(u_prev, t_n_norm):
+                # Input for NN at this time step
+                xt = jnp.stack([x_norm, jnp.full_like(x_norm, t_n_norm)], axis=1)
+                f_n = model.apply(params, xt)
+
+                # Backward Euler: A*u_next = u_prev/k + f_n
+                rhs = u_prev / k + f_n
+                u_next = chol_solve(L_be, rhs)
+
+                return u_next, (u_next, f_n)
+
+            # Scan over time
+            _, (U_seq, F_seq) = lax.scan(step, u0, t_norm)
+            return U_seq, F_seq  # Both (nt, nx)
 
         @jax.jit
         def loss_fn(params):
-            # Get force from neural network
-            force_pred = model.apply(params, input_coords)
-            # Solve PDE
-            u_pred = jnp.linalg.solve(A_fem, force_pred)
-            # Losses
-            data_loss = jnp.mean((u_pred - u_target_vec)**2)
-            reg_loss = self.regularization * jnp.mean(force_pred**2)
+            U_pred, F_pred = forward_with_nn(params)
+
+            # MSE loss (matching working notebook)
+            Nu = u_target.size
+            data_loss = jnp.sum((U_pred.T - u_target)**2) / Nu  # U_pred is (nt,nx), u_target is (nx,nt)
+            reg_loss = self.regularization * jnp.mean(F_pred**2)
+
             return data_loss + reg_loss, (data_loss, reg_loss)
 
-        # Optimization
-        optimizer = optax.adamw(self.optimizer_config['learning_rate'])
+        # Optimizer (use adam with lr decay like working notebook)
+        lr_schedule = optax.exponential_decay(
+            init_value=self.optimizer_config['learning_rate'],
+            transition_steps=max_iter,
+            decay_rate=0.9
+        )
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adam(lr_schedule)
+        )
         opt_state = optimizer.init(params)
 
         @jax.jit
         def train_step(params, opt_state):
             (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-            updates, opt_state = optimizer.update(grads, opt_state)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
             params = optax.apply_updates(params, updates)
             return params, opt_state, loss, data_loss, reg_loss
 
         losses = []
+        print(f"Using TIME-STEPPING solver (matches working notebook)")
         for i in range(max_iter):
             params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
             losses.append(float(loss))
 
-            if i % 200 == 0:
-                print(f"Iter {i}: Loss = {loss:.6f}, Data = {data_loss:.6f}, Reg = {reg_loss:.6f}")
+            if i % 50 == 0:
+                print(f"ep {i:4d} | L={loss:.6f} | mis={data_loss:.6f} | regF={reg_loss:.6f}")
 
-        # Get final force
-        force_final = model.apply(params, input_coords)
-        u_final = jnp.linalg.solve(A_fem, force_final)
+        # Get final predictions
+        U_final, F_final = forward_with_nn(params)
 
-        return params, losses, force_final, u_final
+        # Convert back to (nx, nt) for compatibility
+        u_final = U_final.T  # (nx, nt)
+        force_final = F_final.T  # (nx, nt)
+
+        return params, losses, force_final.flatten(), u_final.flatten()
 
 
 class Example35_ThermalFin_ParameterEstimation(OptimizationExample):

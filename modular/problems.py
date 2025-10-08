@@ -74,20 +74,20 @@ class Poisson1DVector(PDEProblem):
         )
 
     def source_term(self, x: jnp.ndarray, t: Optional[jnp.ndarray] = None) -> jnp.ndarray:
-        """f(x) = À²sin(Àx)"""
+        """f(x) = pi^2 * sin(pi*x)"""
         return jnp.pi**2 * jnp.sin(jnp.pi * x)
 
     def analytical_solution(self, x: jnp.ndarray, t: Optional[jnp.ndarray] = None) -> jnp.ndarray:
-        """u(x) = sin(Àx)"""
+        """u(x) = sin(pi*x)"""
         return jnp.sin(jnp.pi * x)
 
 
 class HeatEquation1D(PDEProblem):
     """
     1+1D Heat equation (Example 3.3 from paper).
-    u/t - ²u/x² = f(x,t), (x,t)  (0,1) × (0,T)
+    u/t - ï¿½u/xï¿½ = f(x,t), (x,t)  (0,1) ï¿½ (0,T)
     u(0,t) = u(1,t) = 0
-    u(x,0) = u€(x)
+    u(x,0) = uï¿½(x)
     """
 
     def __init__(self, T: float = 1.0, zero_ic: bool = True):
@@ -102,7 +102,7 @@ class HeatEquation1D(PDEProblem):
         self.zero_ic = zero_ic
 
     def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-        """Force for target solution sin(Àx)sin(Àt)."""
+        """Force for target solution sin(ï¿½x)sin(ï¿½t)."""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
         return jnp.pi * jnp.sin(jnp.pi * X) * (jnp.cos(jnp.pi * T_mesh) + jnp.pi * jnp.sin(jnp.pi * T_mesh))
 
@@ -114,7 +114,7 @@ class HeatEquation1D(PDEProblem):
             return jnp.sin(jnp.pi * x)
 
     def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-        """u(x,t) = sin(Àx)sin(Àt) for zero IC."""
+        """u(x,t) = sin(ï¿½x)sin(ï¿½t) for zero IC."""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
         if self.zero_ic:
             return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
@@ -126,8 +126,8 @@ class HeatEquation1D(PDEProblem):
 class Poisson2D(PDEProblem):
     """
     2D Poisson equation (Example 3.9 from paper).
-    -·(º(x,y)u) = f(x,y), (x,y)  (0,1)²
-    u = 0 on ©
+    -ï¿½(ï¿½(x,y)u) = f(x,y), (x,y)  (0,1)ï¿½
+    u = 0 on ï¿½
     """
 
     def __init__(self):
@@ -140,12 +140,12 @@ class Poisson2D(PDEProblem):
         )
 
     def diffusion_coefficient(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-        """º(x,y) = 1 + 2x + 3y²"""
+        """ï¿½(x,y) = 1 + 2x + 3yï¿½"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         return 1.0 + 2.0 * X + 3.0 * Y**2
 
     def source_term(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-        """Source term for analytical solution sin(Àx)sin(Ày)."""
+        """Source term for analytical solution sin(ï¿½x)sin(ï¿½y)."""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         f = (-6.0 * jnp.pi * Y * jnp.sin(jnp.pi * X) * jnp.cos(jnp.pi * Y) +
              2.0 * jnp.pi**2 * (2.0 * X + 3.0 * Y**2 + 1.0) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y) -
@@ -153,7 +153,7 @@ class Poisson2D(PDEProblem):
         return f
 
     def analytical_solution(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-        """u(x,y) = sin(Àx)sin(Ày)"""
+        """u(x,y) = sin(ï¿½x)sin(ï¿½y)"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
 
@@ -161,9 +161,9 @@ class Poisson2D(PDEProblem):
 class NonlinearHeat2D(PDEProblem):
     """
     2+1D Nonlinear heat equation (Example 3.6 from paper).
-    u/t - ”u + u² = f, in © × I
-    u = 0, on © × I
-    u = u€ on © × {0}
+    u/t - ï¿½u + uï¿½ = f, in ï¿½ ï¿½ I
+    u = 0, on ï¿½ ï¿½ I
+    u = uï¿½ on ï¿½ ï¿½ {0}
     """
 
     def __init__(self, T: float = 1.0):
@@ -177,7 +177,7 @@ class NonlinearHeat2D(PDEProblem):
         self.T = T
 
     def source_term(self, x: jnp.ndarray, y: jnp.ndarray, t: float) -> jnp.ndarray:
-        """f(x,y,t) = -2te^(t²) + e^t*sin(Àx)sin(Ày) + e^(2t²) + 2À²e^(t²)"""
+        """f(x,y,t) = -2te^(tï¿½) + e^t*sin(ï¿½x)sin(ï¿½y) + e^(2tï¿½) + 2ï¿½ï¿½e^(tï¿½)"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         f = (-2.0 * t * jnp.exp(t**2) + jnp.exp(t) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y) +
              jnp.exp(2.0 * t**2) * jnp.exp(-2.0 * t**2 + t) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y) +
@@ -185,12 +185,12 @@ class NonlinearHeat2D(PDEProblem):
         return f
 
     def initial_condition(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-        """u€(x,y) = sin(Àx)sin(Ày)"""
+        """uï¿½(x,y) = sin(ï¿½x)sin(ï¿½y)"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
 
     def analytical_solution(self, x: jnp.ndarray, y: jnp.ndarray, t: float) -> jnp.ndarray:
-        """u(x,y,t) = exp(t-t²)sin(Àx)sin(Ày)"""
+        """u(x,y,t) = exp(t-tï¿½)sin(ï¿½x)sin(ï¿½y)"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         return jnp.exp(t - t**2) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
 
@@ -198,9 +198,9 @@ class NonlinearHeat2D(PDEProblem):
 class WaveEquation1D(PDEProblem):
     """
     1+1D Wave equation.
-    ²u/t² - c²²u/x² = f(x,t)
+    ï¿½u/tï¿½ - cï¿½ï¿½u/xï¿½ = f(x,t)
     u(0,t) = u(1,t) = 0
-    u(x,0) = u€(x), u/t(x,0) = v€(x)
+    u(x,0) = uï¿½(x), u/t(x,0) = vï¿½(x)
     """
 
     def __init__(self, c: float = 1.0, T: float = 1.0):
@@ -217,7 +217,7 @@ class WaveEquation1D(PDEProblem):
     def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
         """Force for standing wave solution."""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
-        # For solution u = sin(Àx)cos(Àct)
+        # For solution u = sin(ï¿½x)cos(ï¿½ct)
         return jnp.zeros_like(X)  # Homogeneous wave equation
 
     def initial_condition(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -227,7 +227,7 @@ class WaveEquation1D(PDEProblem):
         return u0, v0
 
     def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-        """u(x,t) = sin(Àx)cos(Àct) - standing wave."""
+        """u(x,t) = sin(ï¿½x)cos(ï¿½ct) - standing wave."""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
         return jnp.sin(jnp.pi * X) * jnp.cos(jnp.pi * self.c * T_mesh)
 
@@ -235,7 +235,7 @@ class WaveEquation1D(PDEProblem):
 class AdvectionDiffusion1D(PDEProblem):
     """
     1+1D Advection-Diffusion equation.
-    u/t + vu/x - D²u/x² = f(x,t)
+    u/t + vu/x - Dï¿½u/xï¿½ = f(x,t)
     """
 
     def __init__(self, v: float = 1.0, D: float = 0.1, T: float = 1.0):
@@ -253,7 +253,7 @@ class AdvectionDiffusion1D(PDEProblem):
     def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
         """Source term for traveling wave solution."""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
-        # For solution u = sin(À(x - vt))exp(-À²Dt)
+        # For solution u = sin(ï¿½(x - vt))exp(-ï¿½ï¿½Dt)
         return jnp.zeros_like(X)
 
     def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -270,8 +270,8 @@ class AdvectionDiffusion1D(PDEProblem):
 class ThermalFin2D(PDEProblem):
     """
     2D Thermal fin problem (Example 3.5 from paper).
-    -·(ºbu) = 0 in ©b
-    with different conductivities ºb in subdomains.
+    -ï¿½(ï¿½bu) = 0 in ï¿½b
+    with different conductivities ï¿½b in subdomains.
     """
 
     def __init__(self):
