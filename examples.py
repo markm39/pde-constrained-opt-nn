@@ -181,25 +181,33 @@ class Example32_Poisson1D_VectorForce(OptimizationExample):
 class Example33_HeatEquation_ForceNN(OptimizationExample):
     """Example 3.3: 1+1D Heat equation with neural network force."""
 
-    def __init__(self, zero_ic: bool = True, discretization: str = "fd"):
+    def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d", **problem_kwargs):
+        # Adaptive grid resolution based on oscillations
+        n_osc = problem_kwargs.get('n_oscillations', 1)
+        nx = max(600, n_osc * 30)  # At least 30 points per wavelength
+        nt = 50
+
+        # Adaptive regularization - less for high frequencies
+        reg = 1e-6 / (n_osc ** 0.5) if n_osc > 1 else 1e-6
+
         super().__init__(
             name=f"Example 3.3: Heat Equation with NN Force ({discretization.upper()})",
-            problem_name="heat-1d",
+            problem_name=problem_name,
             solver_type="heat",
             discretization=discretization,  # Can be 'fd', 'fem', or 'crank-nicolson'
             optimization_type="force",
-            grid_params={"nx": 149, "nt": 50},  # Match working notebook: nh=150 → nx=149
-            optimizer_config={"learning_rate": 3e-3, "optimizer": "adam"},  # Match working notebook
-            regularization=1e-5  # Match working notebook
+            grid_params={"nx": nx, "nt": nt},
+            optimizer_config={"learning_rate": 3e-3, "optimizer": "adam"},
+            regularization=reg
         )
-        self.zero_ic = zero_ic
+        self.problem_kwargs = problem_kwargs
 
     def run(self, max_iter: int = 2000):
         """Run the optimization with neural network using TIME-STEPPING (matches working notebook!)."""
         from jax import lax
         import jax.scipy.linalg as jsp
 
-        problem = get_problem(self.problem_name, zero_ic=self.zero_ic)
+        problem = get_problem(self.problem_name, **self.problem_kwargs)
         solver = get_solver(self.solver_type, self.discretization,
                           nx=self.grid_params['nx'], nt=self.grid_params['nt'])
 
@@ -222,8 +230,8 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         # Target solution (full trajectory)
         u_target = problem.analytical_solution(x_grid, t_grid)  # (nx, nt)
 
-        # Initial condition
-        u0 = jnp.zeros(solver.nx) if self.zero_ic else jnp.sin(jnp.pi * x_grid)
+        # Initial condition (use the problem's IC)
+        u0 = problem.initial_condition(x_grid)
 
         # Initialize neural network
         model = create_neural_network([256, 256], 'tanh')
@@ -314,7 +322,7 @@ class Example36_NonlinearHeat2D(OptimizationExample):
             optimization_type="force",
             grid_params={"nx": 30, "ny": 30, "nt": 50},  # 2D spatial grid + time
             optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
-            regularization=1e-4
+            regularization=1e-5
         )
 
     def run(self, max_iter: int = 2000):
@@ -506,7 +514,7 @@ def run_all_examples():
     print("\n" + "="*60)
     print("Example 3.3: Heat Equation with Neural Network Force")
     print("="*60)
-    ex3 = get_example('example-3.3', zero_ic=True)
+    ex3 = get_example('example-3.3')
     params, losses, force, solution = ex3.run(max_iter=500)
     print(f"Final loss: {losses[-1]:.6e}")
 

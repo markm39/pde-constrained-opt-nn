@@ -384,22 +384,96 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             # Get true solution
             u_true = problem.analytical_solution(x_grid, t_grid)
 
-            # Plot space-time heatmaps
-            figures['solution_spacetime'] = plot_spacetime_heatmap(
-                u_pred, x_grid, t_grid, title="Predicted Solution - Space-Time Evolution",
-                figsize=(10*figsize_scale, 6*figsize_scale)
-            )
+            # Get true force
+            f_true = problem.source_term(x_grid, t_grid)
 
-            figures['force_spacetime'] = plot_spacetime_heatmap(
-                f_pred, x_grid, t_grid, title="Predicted Force - Space-Time Evolution",
-                figsize=(10*figsize_scale, 6*figsize_scale)
-            )
+            # Plot space-time heatmaps - True vs Predicted Solution
+            fig_sol, axes = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
 
-            # Plot temporal snapshots
-            figures['solution_snapshots'] = plot_spacetime_snapshots(
-                u_pred, x_grid, t_grid, num_snapshots=min(max_snapshots, nt),
-                title_prefix="Predicted Solution", figsize=(12*figsize_scale, 4*figsize_scale)
-            )
+            # True solution
+            im1 = axes[0].imshow(u_true.T, aspect='auto', origin='lower', cmap='viridis',
+                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes[0].set_xlabel('x')
+            axes[0].set_ylabel('t')
+            axes[0].set_title('True Solution - Space-Time')
+            plt.colorbar(im1, ax=axes[0], label='u(x,t)')
+
+            # Predicted solution
+            im2 = axes[1].imshow(u_pred.T, aspect='auto', origin='lower', cmap='viridis',
+                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes[1].set_xlabel('x')
+            axes[1].set_ylabel('t')
+            axes[1].set_title('Predicted Solution - Space-Time')
+            plt.colorbar(im2, ax=axes[1], label='u(x,t)')
+
+            # Error
+            error = jnp.abs(u_true - u_pred)
+            im3 = axes[2].imshow(error.T, aspect='auto', origin='lower', cmap='hot',
+                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes[2].set_xlabel('x')
+            axes[2].set_ylabel('t')
+            axes[2].set_title(f'Absolute Error (max={jnp.max(error):.2e})')
+            plt.colorbar(im3, ax=axes[2], label='|error|')
+
+            plt.tight_layout()
+            figures['solution_spacetime'] = fig_sol
+
+            # Plot space-time heatmaps - True vs Predicted Force
+            fig_force, axes_f = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
+
+            # True force
+            im1_f = axes_f[0].imshow(f_true.T, aspect='auto', origin='lower', cmap='viridis',
+                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes_f[0].set_xlabel('x')
+            axes_f[0].set_ylabel('t')
+            axes_f[0].set_title('True Force - Space-Time')
+            plt.colorbar(im1_f, ax=axes_f[0], label='f(x,t)')
+
+            # Predicted force
+            im2_f = axes_f[1].imshow(f_pred.T, aspect='auto', origin='lower', cmap='viridis',
+                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes_f[1].set_xlabel('x')
+            axes_f[1].set_ylabel('t')
+            axes_f[1].set_title('Predicted Force - Space-Time')
+            plt.colorbar(im2_f, ax=axes_f[1], label='f(x,t)')
+
+            # Error
+            error_f = jnp.abs(f_true - f_pred)
+            im3_f = axes_f[2].imshow(error_f.T, aspect='auto', origin='lower', cmap='hot',
+                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+            axes_f[2].set_xlabel('x')
+            axes_f[2].set_ylabel('t')
+            axes_f[2].set_title(f'Absolute Error (max={jnp.max(error_f):.2e})')
+            plt.colorbar(im3_f, ax=axes_f[2], label='|error|')
+
+            plt.tight_layout()
+            figures['force_spacetime'] = fig_force
+
+            # Plot temporal snapshots - True vs Predicted
+            snapshot_indices = np.linspace(0, nt - 1, min(max_snapshots, nt), dtype=int)
+            fig_snaps, axes_snaps = plt.subplots(2, len(snapshot_indices),
+                                                 figsize=(3*len(snapshot_indices)*figsize_scale, 6*figsize_scale),
+                                                 sharex=True, sharey=True)
+            if len(snapshot_indices) == 1:
+                axes_snaps = axes_snaps.reshape(2, 1)
+
+            for i, idx in enumerate(snapshot_indices):
+                # True solution
+                axes_snaps[0, i].plot(x_grid, u_true[:, idx], 'b-', linewidth=2)
+                axes_snaps[0, i].set_title(f't={t_grid[idx]:.3f}')
+                axes_snaps[0, i].grid(True, alpha=0.3)
+                if i == 0:
+                    axes_snaps[0, i].set_ylabel('True u(x,t)')
+
+                # Predicted solution
+                axes_snaps[1, i].plot(x_grid, u_pred[:, idx], 'r--', linewidth=2)
+                axes_snaps[1, i].set_xlabel('x')
+                axes_snaps[1, i].grid(True, alpha=0.3)
+                if i == 0:
+                    axes_snaps[1, i].set_ylabel('Predicted u(x,t)')
+
+            plt.tight_layout()
+            figures['solution_snapshots'] = fig_snaps
 
             # Plot comparison at final time
             fig, ax = plt.subplots(figsize=(8*figsize_scale, 5*figsize_scale))

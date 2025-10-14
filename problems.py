@@ -85,42 +85,44 @@ class Poisson1DVector(PDEProblem):
 class HeatEquation1D(PDEProblem):
     """
     1+1D Heat equation (Example 3.3 from paper).
-    u/t - �u/x� = f(x,t), (x,t)  (0,1) � (0,T)
+    u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
     u(0,t) = u(1,t) = 0
-    u(x,0) = u�(x)
+    u(x,0) = 0 (zero initial condition)
+
+    Target solution: u(x,t) = sin(π*x)sin(π*t)
+    This grows from zero IC with appropriate forcing term.
     """
 
-    def __init__(self, T: float = 1.0, zero_ic: bool = True):
+    def __init__(self, T: float = 1.0):
         super().__init__(
             name="1+1D Heat Equation",
             description="Heat equation in 1D space + time",
             domain=(0.0, 1.0, T),
             boundary_conditions="Homogeneous Dirichlet in space",
-            parameters={"T": T, "zero_ic": zero_ic}
+            parameters={"T": T}
         )
         self.T = T
-        self.zero_ic = zero_ic
 
     def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-        """Force for target solution sin(�x)sin(�t)."""
+        """
+        Force for target solution u(x,t) = sin(π*x)sin(π*t).
+
+        Derivation:
+        ∂u/∂t = π*sin(π*x)cos(π*t)
+        ∂²u/∂x² = -π²*sin(π*x)sin(π*t)
+        f = ∂u/∂t - ∂²u/∂x² = π*sin(π*x)[cos(π*t) + π*sin(π*t)]
+        """
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
         return jnp.pi * jnp.sin(jnp.pi * X) * (jnp.cos(jnp.pi * T_mesh) + jnp.pi * jnp.sin(jnp.pi * T_mesh))
 
     def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Initial condition."""
-        if self.zero_ic:
-            return jnp.zeros_like(x)
-        else:
-            return jnp.sin(jnp.pi * x)
+        """Zero initial condition."""
+        return jnp.zeros_like(x)
 
     def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-        """u(x,t) = sin(�x)sin(�t) for zero IC."""
+        """Target solution: u(x,t) = sin(π*x)sin(π*t)"""
         X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
-        if self.zero_ic:
-            return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
-        else:
-            # More complex solution for non-zero IC
-            return jnp.exp(t - t**2) * jnp.sin(jnp.pi * X)
+        return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
 
 
 class Poisson2D(PDEProblem):
@@ -156,6 +158,51 @@ class Poisson2D(PDEProblem):
         """u(x,y) = sin(�x)sin(�y)"""
         X, Y = jnp.meshgrid(x, y, indexing='ij')
         return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+
+
+class HeatEquation1DOscillating(PDEProblem):
+    """
+    1+1D Heat equation with highly oscillating target solution.
+    u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = 0 (zero initial condition)
+
+    Target solution: u(x,t) = sin(k*π*x)sin(π*t)
+    This grows from zero IC with appropriate forcing term.
+    """
+
+    def __init__(self, T: float = 1.0, n_oscillations: int = 10):
+        super().__init__(
+            name=f"1+1D Heat Equation (Oscillating k={n_oscillations})",
+            description=f"Heat equation with {n_oscillations} spatial oscillations",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T, "n_oscillations": n_oscillations}
+        )
+        self.T = T
+        self.k = n_oscillations  # Number of spatial oscillations
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(k*π*x)sin(π*t).
+
+        Derivation:
+        ∂u/∂t = π*sin(k*π*x)cos(π*t)
+        ∂²u/∂x² = -k²*π²*sin(k*π*x)sin(π*t)
+        f = ∂u/∂t - ∂²u/∂x² = π*sin(k*π*x)[cos(π*t) + k²*π*sin(π*t)]
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        k_pi = self.k * jnp.pi
+        return jnp.pi * jnp.sin(k_pi * X) * (jnp.cos(jnp.pi * T_mesh) + k_pi * self.k * jnp.sin(jnp.pi * T_mesh))
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero initial condition."""
+        return jnp.zeros_like(x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(k*π*x)sin(π*t)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(self.k * jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
 
 
 class NonlinearHeat2D(PDEProblem):
@@ -291,6 +338,7 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'poisson-1d-scalar': Poisson1DScalar,
         'poisson-1d-vector': Poisson1DVector,
         'heat-1d': HeatEquation1D,
+        'heat-1d-oscillating': HeatEquation1DOscillating,
         'poisson-2d': Poisson2D,
         'nonlinear-heat-2d': NonlinearHeat2D,
         'wave-1d': WaveEquation1D,
