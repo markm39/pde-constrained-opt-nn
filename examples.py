@@ -29,15 +29,38 @@ class OptimizationExample:
     regularization: float = 1e-6
 
 
-def create_neural_network(hidden_layers: list = [256, 256], activation: str = 'tanh'):
-    """Create a neural network for force/parameter approximation."""
+def create_neural_network(hidden_layers: list = [256, 256], activation: str = 'tanh',
+                         use_fourier_features: bool = False, fourier_scale: float = 10.0):
+    """
+    Create a neural network for force/parameter approximation.
+
+    Args:
+        hidden_layers: List of hidden layer sizes
+        activation: Activation function ('tanh', 'relu', 'sigmoid')
+        use_fourier_features: Whether to use Fourier feature encoding for high-frequency learning
+        fourier_scale: Scale parameter for random Fourier features (higher = more high-freq)
+    """
 
     class Network(nn.Module):
         layers: list
         activation: str
+        use_fourier: bool = False
+        fourier_scale: float = 10.0
 
         @nn.compact
         def __call__(self, x):
+            # Apply Fourier features if enabled
+            if self.use_fourier:
+                # x has shape (batch, input_dim)
+                # Create random Fourier feature matrix
+                input_dim = x.shape[-1]
+                B = self.param('fourier_B',
+                              nn.initializers.normal(stddev=self.fourier_scale),
+                              (input_dim, 256))
+                # Fourier features: [cos(2πBx), sin(2πBx)]
+                x_proj = 2 * jnp.pi * x @ B
+                x = jnp.concatenate([jnp.cos(x_proj), jnp.sin(x_proj)], axis=-1)
+
             for i, features in enumerate(self.layers):
                 x = nn.Dense(features)(x)
                 if i < len(self.layers) - 1:
@@ -51,7 +74,8 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
             x = nn.Dense(1)(x)
             return x.squeeze(-1)
 
-    return Network(layers=hidden_layers, activation=activation)
+    return Network(layers=hidden_layers, activation=activation,
+                   use_fourier=use_fourier_features, fourier_scale=fourier_scale)
 
 
 class Example31_Poisson1D_ScalarForce(OptimizationExample):
@@ -184,7 +208,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
     def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d", **problem_kwargs):
         # Adaptive grid resolution based on oscillations
         n_osc = problem_kwargs.get('n_oscillations', 1)
-        nx = max(600, n_osc * 30)  # At least 30 points per wavelength
+        nx = max(149, n_osc * 30)  # At least 30 points per wavelength
         nt = 50
 
         # Adaptive regularization - less for high frequencies
@@ -203,7 +227,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         self.problem_kwargs = problem_kwargs
 
     def run(self, max_iter: int = 2000):
-        """Run the optimization with neural network using TIME-STEPPING (matches working notebook!)."""
+        """Run the optimization with neural network using TIME-STEPPING."""
         from jax import lax
         import jax.scipy.linalg as jsp
 
@@ -233,11 +257,20 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         # Initial condition (use the problem's IC)
         u0 = problem.initial_condition(x_grid)
 
-        # Initialize neural network
-        model = create_neural_network([256, 256], 'tanh')
+        # Initialize neural network with adaptive Fourier features
+        n_osc = self.problem_kwargs.get('n_oscillations', 1)
+        use_fourier = n_osc >= 4  # Use Fourier features for high-frequency problems
+        fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
+
+        model = create_neural_network([256, 256], 'tanh',
+                                     use_fourier_features=use_fourier,
+                                     fourier_scale=fourier_scale)
         key = jax.random.PRNGKey(42)
         dummy = jnp.zeros((1, 2))
         params = model.init(key, dummy)
+
+        if use_fourier:
+            print(f"Using Fourier features with scale={fourier_scale:.1f} for k={n_osc} oscillations")
 
         # Normalize coordinates
         x_norm = 2.0 * x_grid - 1.0
