@@ -205,14 +205,17 @@ class Example32_Poisson1D_VectorForce(OptimizationExample):
 class Example33_HeatEquation_ForceNN(OptimizationExample):
     """Example 3.3: 1+1D Heat equation with neural network force."""
 
-    def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d", **problem_kwargs):
+    def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d", regularization: float = None, **problem_kwargs):
         # Adaptive grid resolution based on oscillations
         n_osc = problem_kwargs.get('n_oscillations', 1)
         nx = max(149, n_osc * 30)  # At least 30 points per wavelength
         nt = 50
 
-        # Adaptive regularization - less for high frequencies
-        reg = 1e-6 / (n_osc ** 0.5) if n_osc > 1 else 1e-6
+        # Adaptive regularization - less for high frequencies (only if not explicitly provided)
+        if regularization is None:
+            reg = 1e-6 / (n_osc ** 0.5) if n_osc > 1 else 1e-6
+        else:
+            reg = regularization
 
         super().__init__(
             name=f"Example 3.3: Heat Equation with NN Force ({discretization.upper()})",
@@ -345,7 +348,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
 class Example36_NonlinearHeat2D(OptimizationExample):
     """Example 3.6: 2+1D Nonlinear heat equation with neural network force."""
 
-    def __init__(self, zero_ic=None, **kwargs):
+    def __init__(self, zero_ic=None, regularization: float = 1e-5, **kwargs):
         # Accept zero_ic for compatibility but don't use it
         super().__init__(
             name="Example 3.6: 2+1D Nonlinear Heat Equation",
@@ -355,7 +358,7 @@ class Example36_NonlinearHeat2D(OptimizationExample):
             optimization_type="force",
             grid_params={"nx": 30, "ny": 30, "nt": 50},  # 2D spatial grid + time
             optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
-            regularization=1e-5
+            regularization=regularization
         )
 
     def run(self, max_iter: int = 2000):
