@@ -393,7 +393,7 @@ class Example36_NonlinearHeat2D(OptimizationExample):
         u_target = u_target_3d.reshape(n_spatial, solver.nt)  # (nx*ny, nt)
 
         # Initialize neural network (NN input: [x, y, t] → output: f(x,y,t))
-        model = create_neural_network([256, 256], 'tanh')
+        model = create_neural_network([256, 256], 'relu')
         key = jax.random.PRNGKey(42)
         dummy = jnp.zeros((1, 3))  # 3 inputs: x, y, t
         params = model.init(key, dummy)

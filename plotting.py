@@ -359,17 +359,35 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
                 title_prefix="Predicted Solution", figsize=(12*figsize_scale, 10*figsize_scale)
             )
 
-            # Plot temporal snapshots of force
+            # Get true force at different time steps
+            f_true_3d = jnp.stack([problem.source_term(x_grid, y_grid, t)
+                                   for t in t_grid], axis=-1)
+
+            # Plot temporal snapshots of predicted force
             figures['force_snapshots'] = plot_2d_snapshots(
                 f_pred, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
                 title_prefix="Predicted Force", figsize=(12*figsize_scale, 10*figsize_scale)
             )
 
-            # Plot final time comparison
-            figures['final_comparison'] = plot_comparison_heatmaps(
+            # Plot temporal snapshots of true force
+            figures['true_force_snapshots'] = plot_2d_snapshots(
+                f_true_3d, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
+                title_prefix="True Force", figsize=(12*figsize_scale, 10*figsize_scale)
+            )
+
+            # Plot final time comparison for solution
+            figures['final_solution_comparison'] = plot_comparison_heatmaps(
                 u_true_3d[:, :, -1], u_pred[:, :, -1], x_grid, y_grid,
                 title1=f"True Solution (t={t_grid[-1]:.3f})",
                 title2=f"Predicted Solution (t={t_grid[-1]:.3f})",
+                figsize=(14*figsize_scale, 5*figsize_scale)
+            )
+
+            # Plot final time comparison for force
+            figures['final_force_comparison'] = plot_comparison_heatmaps(
+                f_true_3d[:, :, -1], f_pred[:, :, -1], x_grid, y_grid,
+                title1=f"True Force (t={t_grid[-1]:.3f})",
+                title2=f"Predicted Force (t={t_grid[-1]:.3f})",
                 figsize=(14*figsize_scale, 5*figsize_scale)
             )
 
