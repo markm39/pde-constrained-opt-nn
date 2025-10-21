@@ -70,8 +70,9 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.relu(x)
                     elif self.activation == 'sigmoid':
                         x = nn.sigmoid(x)
-            # Output layer
+            # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
+            x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
@@ -265,7 +266,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         use_fourier = n_osc >= 4  # Use Fourier features for high-frequency problems
         fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
 
-        model = create_neural_network([256, 256], 'tanh',
+        model = create_neural_network([256, 256], 'relu',
                                      use_fourier_features=use_fourier,
                                      fourier_scale=fourier_scale)
         key = jax.random.PRNGKey(42)
