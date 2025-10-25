@@ -28,7 +28,8 @@ Refactored into reusable components for scalability and testing:
 
 ```bibtex
 @article{pde-nn-2024,
-  title={PDE-Constrained Optimization with Neural Network Surrogates},
+  title={Optimal control of partial differential equations in PyTorch using
+automatic differentiation and neural network surrogates},
   url={https://arxiv.org/abs/2408.12404},
   year={2024}
 }
