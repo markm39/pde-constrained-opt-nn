@@ -11,8 +11,8 @@ from typing import Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 
-from solvers import get_solver
-from problems import get_problem
+from pde_opt.solvers import get_solver
+from pde_opt.problems import get_problem
 
 
 @dataclass
@@ -72,7 +72,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.sigmoid(x)
             # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
-            x = nn.relu(x)  # Apply ReLU to output layer
+            # x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
@@ -266,7 +266,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         use_fourier = n_osc >= 4  # Use Fourier features for high-frequency problems
         fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
 
-        model = create_neural_network([256, 256], 'relu',
+        model = create_neural_network([256, 256], 'tanh',
                                      use_fourier_features=use_fourier,
                                      fourier_scale=fourier_scale)
         key = jax.random.PRNGKey(42)
@@ -342,6 +342,171 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         # Convert back to (nx, nt) for compatibility
         u_final = U_final.T  # (nx, nt)
         force_final = F_final.T  # (nx, nt)
+
+        return params, losses, force_final.flatten(), u_final.flatten()
+
+
+class Example35_LinearHeat2D(OptimizationExample):
+    """Example 3.5: 2+1D Linear heat equation with neural network force."""
+
+    def __init__(self, zero_ic=None, regularization: float = 1e-5, prob: str = 'default', **kwargs):
+        # Accept zero_ic for compatibility but don't use it
+        # Adaptive grid size based on problem type
+        if prob == 'cossinsin':
+            # Oscillatory problem needs finer grid
+            # find_optimal_config() to get < 1% error (needs ~nx=100, ny=100, nt=200)
+            nx, ny, nt = 112, 112, 200
+        else:
+            # Default problem works well with coarser grid (~0.5% solver error)
+            nx, ny, nt = 30, 30, 50
+
+        super().__init__(
+            name=f"Example 3.5: 2+1D Linear Heat Equation ({prob})",
+            problem_name="linear-heat-2d",
+            solver_type="nonlinear-heat-2d",  # Reuse the same solver infrastructure
+            discretization="crank-nicolson",
+            optimization_type="force",
+            grid_params={"nx": nx, "ny": ny, "nt": nt},
+            optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
+            regularization=regularization
+        )
+        self.prob = prob
+
+    def run(self, max_iter: int = 2000, validate: bool = False):
+        """Run the optimization with neural network using TIME-STEPPING (Crank-Nicolson extended from 1D to 2D)."""
+        from jax import lax
+        import jax.scipy.linalg as jsp
+
+        # Validate solver accuracy if requested
+        if validate:
+            from solver_validation import validate_solver, find_optimal_config
+            is_valid, rel_error, details = validate_solver(self, threshold=0.01, verbose=True)
+            if not is_valid:
+                print(f"⚠ WARNING: Solver error ({rel_error*100:.2f}%) exceeds 1% threshold!")
+                print(f"This may prevent accurate recovery of the forcing term.")
+                print(f"\nTo find optimal grid size, run:")
+                print(f"  from solver_validation import find_optimal_config")
+                print(f"  find_optimal_config(ex)")
+                print()
+                response = input("Continue anyway? (y/n): ")
+                if response.lower() != 'y':
+                    print("Exiting. Please adjust grid_params and try again.")
+                    return None, [], None, None
+
+        problem = get_problem(self.problem_name, prob=self.prob)
+        solver = get_solver(self.solver_type, self.discretization,
+                          nx=self.grid_params['nx'], ny=self.grid_params['ny'],
+                          nt=self.grid_params['nt'])
+
+        # Grid setup
+        x_grid = solver.x_grid
+        y_grid = solver.y_grid
+        t_grid = solver.t_grid
+        k = solver.k  # Time step
+
+        # Create Crank-Nicolson matrix for time-stepping
+        # Heat equation: du/dt = Δu + f
+        # solver.K represents -Δ (negative Laplacian, has negative diagonal)
+        # So: du/dt = -K·u + f
+        # Crank-Nicolson: (I - k/2 * K) u_{n+1} = (I + k/2 * K) u_n + k * f_n
+        A = solver.K  # -Δ (negative Laplacian)
+        n_spatial = solver.nx * solver.ny
+        A_cn = jnp.eye(n_spatial) - (k/2.0) * A
+        L_cn = jnp.linalg.cholesky(A_cn)
+
+        def chol_solve(L, b):
+            y = jsp.solve_triangular(L, b, lower=True)
+            u = jsp.solve_triangular(L.T, y, lower=False)
+            return u
+
+        # Target solution (full trajectory)
+        u_target_3d = jnp.stack([problem.analytical_solution(x_grid, y_grid, t)
+                                  for t in t_grid], axis=-1)  # (nx, ny, nt)
+        u_target = u_target_3d.reshape(n_spatial, solver.nt)  # (nx*ny, nt)
+
+        # Initial condition (use the problem's IC)
+        u0_2d = problem.initial_condition(x_grid, y_grid)
+        u0 = u0_2d.flatten()  # Shape: (nx*ny,)
+
+        # Initialize neural network (NN input: [x, y, t] → output: f(x,y,t))
+        model = create_neural_network([256, 256], 'relu')
+        key = jax.random.PRNGKey(42)
+        dummy = jnp.zeros((1, 3))  # 3 inputs: x, y, t
+        params = model.init(key, dummy)
+
+        # Normalize coordinates (same as 1D)
+        x_norm = 2.0 * x_grid / solver.Lx - 1.0
+        y_norm = 2.0 * y_grid / solver.Ly - 1.0
+        t_norm = 2.0 * t_grid / solver.T - 1.0
+
+        # Create meshgrid for spatial coordinates
+        X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
+        xy_flat = jnp.stack([X_norm.flatten(), Y_norm.flatten()], axis=1)  # (nx*ny, 2)
+
+        def forward_with_nn(params):
+            """Time-stepping forward pass with NN forcing (Crank-Nicolson, same structure as 1D)."""
+            def step(u_prev, t_n_norm):
+                # Input for NN at this time step (extend 1D pattern to 2D)
+                xyt = jnp.stack([xy_flat[:, 0], xy_flat[:, 1], jnp.full(n_spatial, t_n_norm)], axis=1)
+                f_n = model.apply(params, xyt)
+
+                # Crank-Nicolson: (I - k/2 * A) u_next = (I + k/2 * A) u_prev + k * f_n
+                # where A = solver.K is -Δ (negative Laplacian)
+                rhs = (jnp.eye(n_spatial) + (k/2.0) * A) @ u_prev + k * f_n
+                u_next = chol_solve(L_cn, rhs)
+
+                return u_next, (u_next, f_n)
+
+            # Scan over time
+            _, (U_seq, F_seq) = lax.scan(step, u0, t_norm)
+            return U_seq, F_seq  # U_seq: (nt, nx*ny), F_seq: (nt, nx*ny)
+
+        @jax.jit
+        def loss_fn(params):
+            U_pred, F_pred = forward_with_nn(params)
+
+            # MSE loss
+            Nu = u_target.size
+            data_loss = jnp.sum((U_pred.T - u_target)**2) / Nu  # U_pred is (nt, nx*ny), u_target is (nx*ny, nt)
+            reg_loss = self.regularization * jnp.mean(F_pred**2)
+
+            return data_loss + reg_loss, (data_loss, reg_loss)
+
+        # Optimizer
+        lr_schedule = optax.exponential_decay(
+            init_value=self.optimizer_config['learning_rate'],
+            transition_steps=max_iter,
+            decay_rate=0.9
+        )
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adam(lr_schedule)
+        )
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        print(f"Using Crank-Nicolson for linear heat equation ({self.prob})")
+
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+
+            if i % 50 == 0:
+                print(f"ep {i:4d} | L={loss:.6f} | mis={data_loss:.6f} | regF={reg_loss:.6f}")
+
+        # Get final predictions
+        U_final, F_final = forward_with_nn(params)
+
+        # Convert back to (nx, ny, nt) for compatibility
+        u_final = U_final.T.reshape(solver.nx, solver.ny, solver.nt)  # (nx, ny, nt)
+        force_final = F_final.T.reshape(solver.nx, solver.ny, solver.nt)  # (nx, ny, nt)
 
         return params, losses, force_final.flatten(), u_final.flatten()
 
@@ -517,6 +682,7 @@ def get_example(example_name: str, **kwargs):
         'example-3.1': Example31_Poisson1D_ScalarForce,
         'example-3.2': Example32_Poisson1D_VectorForce,
         'example-3.3': Example33_HeatEquation_ForceNN,
+        'example-3.5': Example35_LinearHeat2D,
         'example-3.6': Example36_NonlinearHeat2D,
     }
 

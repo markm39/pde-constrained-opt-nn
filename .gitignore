@@ -5,6 +5,25 @@ __pycache__/
 *.so
 .Python
 
+# Package build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Testing
+.pytest_cache/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
 # Virtual Environment
 venv/
 env/

@@ -205,6 +205,79 @@ class HeatEquation1DOscillating(PDEProblem):
         return jnp.sin(self.k * jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
 
 
+class LinearHeat2D(PDEProblem):
+    """
+    2+1D Linear heat equation (same as nonlinear but without u² term).
+    ∂u/∂t - Δu = f, in Ω × I
+    u = 0, on ∂Ω × I
+    u = u₀ on Ω × {0}
+
+    Supports different test cases via the 'prob' parameter.
+    """
+
+    def __init__(self, T: float = 1.0, prob: str = 'default'):
+        super().__init__(
+            name=f"2+1D Linear Heat ({prob})",
+            description="Linear heat equation in 2D space + time",
+            domain=(0.0, 1.0, 0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet",
+            parameters={"T": T, "prob": prob}
+        )
+        self.T = T
+        self.prob = prob
+
+    def source_term(self, x: jnp.ndarray, y: jnp.ndarray, t: float) -> jnp.ndarray:
+        """
+        Source term for PDE: ∂u/∂t - Δu = f
+
+        Different cases based on self.prob:
+        - 'default': u(x,y,t) = exp(t-t²)sin(πx)sin(πy)
+        - 'cossinsin': u(x,y,t) = sin(5πx)sin(5πy)sin(5πt)
+        """
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+
+        if self.prob == 'cossinsin':
+            # For u(x,y,t) = sin(5πx)sin(5πy)sin(5πt)
+            # ∂u/∂t = 5π·sin(5πx)sin(5πy)cos(5πt)
+            # Δu = -(5π)²·2·sin(5πx)sin(5πy)sin(5πt) = -50π²·sin(5πx)sin(5πy)sin(5πt)
+            # f = ∂u/∂t - Δu = sin(5πx)sin(5πy)·(5π·cos(5πt) + 50π²·sin(5πt))
+            spatial = jnp.sin(5 * jnp.pi * X) * jnp.sin(5 * jnp.pi * Y)
+            temporal = 5 * jnp.pi * jnp.cos(5 * jnp.pi * t) + 50 * jnp.pi**2 * jnp.sin(5 * jnp.pi * t)
+            f = spatial * temporal
+        else:
+            # Default: u(x,y,t) = exp(t-t²)sin(πx)sin(πy)
+            sin_term = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+            exp_term = jnp.exp(t - t**2)
+            # f = ∂u/∂t - Δu (no u² term compared to nonlinear version)
+            f = ((1.0 - 2.0 * t) * exp_term * sin_term +  # ∂u/∂t
+                 2.0 * jnp.pi**2 * exp_term * sin_term)   # -Δu
+
+        return f
+
+    def initial_condition(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """Initial condition u₀(x,y)"""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+
+        if self.prob == 'cossinsin':
+            # u₀(x,y) = sin(5πx)sin(5πy)·sin(0) = 0
+            # But since we want meaningful IC, use:
+            return jnp.sin(5 * jnp.pi * X) * jnp.sin(5 * jnp.pi * Y)
+        else:
+            # Default: u₀(x,y) = sin(πx)sin(πy)
+            return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+
+    def analytical_solution(self, x: jnp.ndarray, y: jnp.ndarray, t: float) -> jnp.ndarray:
+        """Analytical solution u(x,y,t)"""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+
+        if self.prob == 'cossinsin':
+            # u(x,y,t) = sin(5πx)sin(5πy)sin(5πt)
+            return jnp.sin(5 * jnp.pi * X) * jnp.sin(5 * jnp.pi * Y) * jnp.sin(5 * jnp.pi * t)
+        else:
+            # Default: u(x,y,t) = exp(t-t²)sin(πx)sin(πy)
+            return jnp.exp(t - t**2) * jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+
+
 class NonlinearHeat2D(PDEProblem):
     """
     2+1D Nonlinear heat equation (Example 3.6 from paper).
@@ -340,6 +413,7 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'heat-1d': HeatEquation1D,
         'heat-1d-oscillating': HeatEquation1DOscillating,
         'poisson-2d': Poisson2D,
+        'linear-heat-2d': LinearHeat2D,
         'nonlinear-heat-2d': NonlinearHeat2D,
         'wave-1d': WaveEquation1D,
         'advection-diffusion-1d': AdvectionDiffusion1D,
