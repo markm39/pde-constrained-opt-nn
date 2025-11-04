@@ -236,8 +236,9 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         import jax.scipy.linalg as jsp
 
         problem = get_problem(self.problem_name, **self.problem_kwargs)
+        T = self.problem_kwargs.get('T', 1.0)  # Get T from kwargs, default to 1.0
         solver = get_solver(self.solver_type, self.discretization,
-                          nx=self.grid_params['nx'], nt=self.grid_params['nt'])
+                          nx=self.grid_params['nx'], nt=self.grid_params['nt'], T=T)
 
         # Grid setup
         x_grid = solver.x_grid

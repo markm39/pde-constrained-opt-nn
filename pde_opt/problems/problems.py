@@ -205,6 +205,54 @@ class HeatEquation1DOscillating(PDEProblem):
         return jnp.sin(self.k * jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
 
 
+class HeatEquation1DOscillatingCosine(PDEProblem):
+    """
+    1+1D Heat equation with highly oscillating target solution (cosine in time variant).
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = sin(πωx) (non-zero initial condition)
+
+    Target solution: u(x,t) = sin(πωx)cos(πωt)
+    This starts from non-zero IC and oscillates with cosine temporal behavior.
+    """
+
+    def __init__(self, T: float = 1.0, n_oscillations: int = 10):
+        super().__init__(
+            name=f"1+1D Heat Equation (Oscillating Cosine ω={n_oscillations})",
+            description=f"Heat equation with {n_oscillations} spatial oscillations and cosine time",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T, "n_oscillations": n_oscillations}
+        )
+        self.T = T
+        self.omega = n_oscillations  # Frequency parameter
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(πωx)cos(πωt).
+
+        Derivation:
+        ∂u/∂t = -πω·sin(πωx)sin(πωt)
+        ∂²u/∂x² = -(πω)²·sin(πωx)cos(πωt)
+        f = ∂u/∂t - ∂²u/∂x² = -πω·sin(πωx)sin(πωt) + (πω)²·sin(πωx)cos(πωt)
+                              = sin(πωx)[π²ω²·cos(πωt) - πω·sin(πωt)]
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        pi_omega = jnp.pi * self.omega
+        spatial = jnp.sin(pi_omega * X)
+        temporal = pi_omega**2 * jnp.cos(pi_omega * T_mesh) - pi_omega * jnp.sin(pi_omega * T_mesh)
+        return spatial * temporal
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Initial condition: u(x,0) = sin(πωx)"""
+        return jnp.sin(jnp.pi * self.omega * x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(πωx)cos(πωt)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(jnp.pi * self.omega * X) * jnp.cos(jnp.pi * self.omega * T_mesh)
+
+
 class LinearHeat2D(PDEProblem):
     """
     2+1D Linear heat equation (same as nonlinear but without u² term).
@@ -412,6 +460,7 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'poisson-1d-vector': Poisson1DVector,
         'heat-1d': HeatEquation1D,
         'heat-1d-oscillating': HeatEquation1DOscillating,
+        'heat-1d-oscillating-cosine': HeatEquation1DOscillatingCosine,
         'poisson-2d': Poisson2D,
         'linear-heat-2d': LinearHeat2D,
         'nonlinear-heat-2d': NonlinearHeat2D,
