@@ -308,8 +308,7 @@ class LinearHeat2D(PDEProblem):
 
         if self.prob == 'cossinsin':
             # u₀(x,y) = sin(5πx)sin(5πy)·sin(0) = 0
-            # But since we want meaningful IC, use:
-            return jnp.sin(5 * jnp.pi * X) * jnp.sin(5 * jnp.pi * Y)
+            return jnp.zeros_like(X)
         else:
             # Default: u₀(x,y) = sin(πx)sin(πy)
             return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)

@@ -364,7 +364,7 @@ class Example35_LinearHeat2D(OptimizationExample):
         super().__init__(
             name=f"Example 3.5: 2+1D Linear Heat Equation ({prob})",
             problem_name="linear-heat-2d",
-            solver_type="nonlinear-heat-2d",  # Reuse the same solver infrastructure
+            solver_type="heat-2d",
             discretization="crank-nicolson",
             optimization_type="force",
             grid_params={"nx": nx, "ny": ny, "nt": nt},
@@ -520,7 +520,7 @@ class Example36_NonlinearHeat2D(OptimizationExample):
         super().__init__(
             name="Example 3.6: 2+1D Nonlinear Heat Equation",
             problem_name="nonlinear-heat-2d",
-            solver_type="nonlinear-heat-2d",
+            solver_type="heat-2d",
             discretization="crank-nicolson",
             optimization_type="force",
             grid_params={"nx": 30, "ny": 30, "nt": 50},  # 2D spatial grid + time

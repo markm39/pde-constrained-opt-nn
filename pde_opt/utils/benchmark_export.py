@@ -97,7 +97,7 @@ def _get_problem_formulas(problem_key: str) -> str:
         },
         'linear-heat-2d[prob=cossinsin]': {
             'u': r'$u(x,y,t) = \sin(5\pi x)\sin(5\pi y)\sin(5\pi t)$',
-            'u_0': r'$u_0(x,y) = \sin(5\pi x)\sin(5\pi y)$',
+            'u_0': r'$u_0(x,y) = 0$',
             'f': r'$f(x,y,t) = \sin(5\pi x)\sin(5\pi y)[5\pi\cos(5\pi t) + 50\pi^2\sin(5\pi t)]$'
         },
         'nonlinear-heat-2d': {

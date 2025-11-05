@@ -197,18 +197,21 @@ class HeatEquationCrankNicolson(SpaceTimeSolver):
         return system
 
 
-class NonlinearHeat2DCrankNicolson:
+class Heat2DCrankNicolson:
     """
-    Crank-Nicolson solver for 2+1D nonlinear heat equation with quadratic nonlinearity.
+    Spatial discretization for 2+1D heat equation with Crank-Nicolson scheme.
 
-    PDE: ∂u/∂t - Δu + u² = f(x,y,t)
+    This class provides the 2D Laplacian matrix and grid setup for both linear and
+    nonlinear heat equations. The time-stepping logic (linear solve vs Newton iteration)
+    is handled by the caller.
 
-    Uses Newton's method for implicit time-stepping.
+    Linear PDE: ∂u/∂t - Δu = f(x,y,t)
+    Nonlinear PDE: ∂u/∂t - Δu + u² = f(x,y,t)
     """
 
     def __init__(self, nx: int, ny: int, nt: int, Lx: float = 1.0, Ly: float = 1.0, T: float = 1.0):
         """
-        Initialize 2D nonlinear heat equation solver.
+        Initialize 2D heat equation spatial discretization.
 
         Args:
             nx: Number of spatial points in x direction (interior points)
@@ -261,6 +264,10 @@ class NonlinearHeat2DCrankNicolson:
         K = jnp.kron(Iy, Dx) + jnp.kron(Dy, Ix)
 
         return K
+
+
+# Backwards compatibility alias
+NonlinearHeat2DCrankNicolson = Heat2DCrankNicolson
 
 
 class WaveEquationFD(SpaceTimeSolver):
@@ -474,7 +481,7 @@ def get_solver(problem_type: str, discretization: str, **kwargs):
     Get solver instance by problem type and discretization method.
 
     Args:
-        problem_type: Type of PDE ('heat', 'wave', 'poisson', 'advection-diffusion')
+        problem_type: Type of PDE ('heat', 'heat-2d', 'wave', 'poisson', 'advection-diffusion')
         discretization: Discretization method ('fd', 'fem', 'crank-nicolson')
         **kwargs: Additional arguments for solver constructor
 
@@ -485,7 +492,8 @@ def get_solver(problem_type: str, discretization: str, **kwargs):
         ('heat', 'fd'): HeatEquationFD,
         ('heat', 'fem'): HeatEquationFEM,
         ('heat', 'crank-nicolson'): HeatEquationCrankNicolson,
-        ('nonlinear-heat-2d', 'crank-nicolson'): NonlinearHeat2DCrankNicolson,
+        ('heat-2d', 'crank-nicolson'): Heat2DCrankNicolson,
+        ('nonlinear-heat-2d', 'crank-nicolson'): Heat2DCrankNicolson,  # Backwards compatibility
         ('wave', 'fd'): WaveEquationFD,
         ('poisson', 'fd'): Poisson1DFD,
         ('poisson', '2d-fd'): PoissonFD,

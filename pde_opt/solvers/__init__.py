@@ -5,7 +5,8 @@ from pde_opt.solvers.solvers import (
     HeatEquationFD,
     HeatEquationFEM,
     HeatEquationCrankNicolson,
-    NonlinearHeat2DCrankNicolson,
+    Heat2DCrankNicolson,
+    NonlinearHeat2DCrankNicolson,  # Backwards compatibility alias
     WaveEquationFD,
     Poisson1DFD,
     PoissonFD,
@@ -17,7 +18,8 @@ __all__ = [
     'HeatEquationFD',
     'HeatEquationFEM',
     'HeatEquationCrankNicolson',
-    'NonlinearHeat2DCrankNicolson',
+    'Heat2DCrankNicolson',
+    'NonlinearHeat2DCrankNicolson',  # Backwards compatibility alias
     'WaveEquationFD',
     'Poisson1DFD',
     'PoissonFD',
