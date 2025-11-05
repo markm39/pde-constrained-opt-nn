@@ -63,7 +63,7 @@ def main():
     parser.add_argument(
         '--convergence',
         action='store_true',
-        help='Run convergence study with predefined grids (1D problems only)'
+        help='Run convergence study with predefined grids (both 1D and 2D problems)'
     )
 
     args = parser.parse_args()
@@ -78,8 +78,12 @@ def main():
     print(f"Configuration:")
     if args.convergence:
         print(f"  Mode:          Convergence Study")
-        print(f"  Spatial grids: nx=[50,100,150,200,250], nt=200")
-        print(f"  Temporal grids: nx=150, nt=[50,100,150,200,250]")
+        print(f"  1D Problems:")
+        print(f"    Spatial grids:  nx=[50,100,150,200,250], nt=200")
+        print(f"    Temporal grids: nx=150, nt=[50,100,150,200,250]")
+        print(f"  2D Problems:")
+        print(f"    Spatial grids:  nx=ny=[20,40,60,80,100,120], nt=50")
+        print(f"    Temporal grids: nx=ny=60, nt=[25,50,75,100,125,150]")
     else:
         print(f"  Target Error:  {args.target_error * 100:.1f}%")
         print(f"  Max Grid Size: {args.max_nx}")

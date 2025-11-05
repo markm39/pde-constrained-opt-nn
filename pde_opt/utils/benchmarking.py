@@ -253,8 +253,8 @@ def benchmark_convergence_study(
     problem_name: str,
     problem_kwargs: Dict[str, Any],
     solvers: List[str],
-    spatial_grids: List[Tuple[int, int]],
-    temporal_grids: List[Tuple[int, int]]
+    spatial_grids: List[Tuple],
+    temporal_grids: List[Tuple]
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
     Run convergence study with predefined grid sizes.
@@ -263,23 +263,32 @@ def benchmark_convergence_study(
         problem_name: Name of the problem
         problem_kwargs: Problem parameters
         solvers: List of solver discretizations to test
-        spatial_grids: List of (nx, nt) tuples for spatial convergence
-        temporal_grids: List of (nx, nt) tuples for temporal convergence
+        spatial_grids: List of (nx, nt) tuples for 1D or (nx, ny, nt) tuples for 2D
+        temporal_grids: List of (nx, nt) tuples for 1D or (nx, ny, nt) tuples for 2D
 
     Returns:
         {'spatial': {solver: [results]}, 'temporal': {solver: [results]}}
     """
     results = {'spatial': {}, 'temporal': {}}
+    is_2d = 'heat-2d' in problem_name
 
     for solver in solvers:
         print(f"\n  Solver: {solver}")
 
-        # Spatial convergence (varying nx, fixed nt)
+        # Spatial convergence (varying nx/ny, fixed nt)
         print(f"    Spatial convergence...")
         results['spatial'][solver] = []
-        for nx, nt in spatial_grids:
-            try:
+        for grid in spatial_grids:
+            if is_2d:
+                nx, ny, nt = grid
+                grid_params = {'nx': nx, 'ny': ny, 'nt': nt}
+                grid_str = f"nx={nx}, ny={ny}, nt={nt}"
+            else:
+                nx, nt = grid
                 grid_params = {'nx': nx, 'nt': nt}
+                grid_str = f"nx={nx}, nt={nt}"
+
+            try:
                 result = benchmark_single_config(
                     problem_name,
                     solver,
@@ -288,16 +297,46 @@ def benchmark_convergence_study(
                 )
                 results['spatial'][solver].append(result)
                 error_pct = result['metrics']['rel_error_pct']
-                print(f"      nx={nx}, nt={nt}: {error_pct:.2f}%")
+                print(f"      {grid_str}: {error_pct:.2f}%")
             except Exception as e:
-                print(f"      ✗ Failed at nx={nx}: {e}")
+                # Check if it's a memory error
+                error_msg = str(e)
+                if 'RESOURCE_EXHAUSTED' in error_msg or 'Out of memory' in error_msg:
+                    # Extract memory size from error message
+                    import re
+                    match = re.search(r'allocate (\d+) bytes', error_msg)
+                    if match:
+                        bytes_requested = int(match.group(1))
+                        gb_requested = bytes_requested / (1024**3)
+                        print(f"      ✗ Out of memory at {grid_str}: attempted to allocate {gb_requested:.2f} GB")
+                    else:
+                        print(f"      ✗ Out of memory at {grid_str}")
+                    # Add a failed result with memory error flag
+                    results['spatial'][solver].append({
+                        'problem_name': problem_name,
+                        'problem_params': problem_kwargs.copy(),
+                        'discretization': solver,
+                        'grid_params': grid_params,
+                        'error': 'RESOURCE_EXHAUSTED',
+                        'error_message': error_msg
+                    })
+                else:
+                    print(f"      ✗ Failed at {grid_str}: {e}")
 
-        # Temporal convergence (fixed nx, varying nt)
+        # Temporal convergence (fixed nx/ny, varying nt)
         print(f"    Temporal convergence...")
         results['temporal'][solver] = []
-        for nx, nt in temporal_grids:
-            try:
+        for grid in temporal_grids:
+            if is_2d:
+                nx, ny, nt = grid
+                grid_params = {'nx': nx, 'ny': ny, 'nt': nt}
+                grid_str = f"nx={nx}, ny={ny}, nt={nt}"
+            else:
+                nx, nt = grid
                 grid_params = {'nx': nx, 'nt': nt}
+                grid_str = f"nx={nx}, nt={nt}"
+
+            try:
                 result = benchmark_single_config(
                     problem_name,
                     solver,
@@ -306,9 +345,31 @@ def benchmark_convergence_study(
                 )
                 results['temporal'][solver].append(result)
                 error_pct = result['metrics']['rel_error_pct']
-                print(f"      nx={nx}, nt={nt}: {error_pct:.2f}%")
+                print(f"      {grid_str}: {error_pct:.2f}%")
             except Exception as e:
-                print(f"      ✗ Failed at nt={nt}: {e}")
+                # Check if it's a memory error
+                error_msg = str(e)
+                if 'RESOURCE_EXHAUSTED' in error_msg or 'Out of memory' in error_msg:
+                    # Extract memory size from error message
+                    import re
+                    match = re.search(r'allocate (\d+) bytes', error_msg)
+                    if match:
+                        bytes_requested = int(match.group(1))
+                        gb_requested = bytes_requested / (1024**3)
+                        print(f"      ✗ Out of memory at {grid_str}: attempted to allocate {gb_requested:.2f} GB")
+                    else:
+                        print(f"      ✗ Out of memory at {grid_str}")
+                    # Add a failed result with memory error flag
+                    results['temporal'][solver].append({
+                        'problem_name': problem_name,
+                        'problem_params': problem_kwargs.copy(),
+                        'discretization': solver,
+                        'grid_params': grid_params,
+                        'error': 'RESOURCE_EXHAUSTED',
+                        'error_message': error_msg
+                    })
+                else:
+                    print(f"      ✗ Failed at {grid_str}: {e}")
 
     return results
 
@@ -355,12 +416,21 @@ def benchmark_heat_equations(
         print("=" * 60)
 
         # Determine if 1D or 2D problem
-        is_1d = 'heat-2d' not in problem_name
+        is_2d = 'heat-2d' in problem_name
 
-        if convergence_study and is_1d:
-            # Convergence study mode with predefined grids (1D only)
-            spatial_grids = [(nx, 200) for nx in [50, 100, 150, 200, 250]]
-            temporal_grids = [(150, nt) for nt in [50, 100, 150, 200, 250]]
+        if convergence_study:
+            # Convergence study mode with predefined grids
+            if is_2d:
+                # 2D grids: (nx, ny, nt)
+                # Spatial convergence: vary nx=ny, fix nt
+                # Use smaller grids for 2D to avoid memory issues
+                spatial_grids = [(n, n, 50) for n in [20, 40, 60, 80, 100, 120]]
+                # Temporal convergence: fix nx=ny, vary nt
+                temporal_grids = [(60, 60, nt) for nt in [25, 50, 75, 100, 125, 150]]
+            else:
+                # 1D grids: (nx, nt)
+                spatial_grids = [(nx, 200) for nx in [50, 100, 150, 200, 250]]
+                temporal_grids = [(150, nt) for nt in [50, 100, 150, 200, 250]]
 
             try:
                 conv_results = benchmark_convergence_study(

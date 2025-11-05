@@ -140,7 +140,7 @@ def export_to_markdown(results: Dict[str, Dict[str, List[Dict[str, Any]]]], file
 
             # Determine if 2D
             first_result = next(iter(solver_results.values()))[0] if solver_results else None
-            is_2d = first_result and 'ny' in first_result['grid_params']
+            is_2d = first_result and 'ny' in first_result.get('grid_params', {})
 
             # Table header
             if is_2d:
@@ -154,17 +154,30 @@ def export_to_markdown(results: Dict[str, Dict[str, List[Dict[str, Any]]]], file
             for discretization, bench_results in solver_results.items():
                 for result in bench_results:
                     gp = result['grid_params']
-                    m = result['metrics']
-                    status = "✓" if m['is_valid'] else "✗"
 
-                    if is_2d:
-                        f.write(f"| {discretization} | {gp['nx']} | {gp['ny']} | {gp['nt']} | "
-                                f"{result['total_dofs']:,} | {m['rel_error_pct']:.2f} | "
-                                f"{m['mse']:.2e} | {status} |\n")
+                    # Check if this result has an error (e.g., out of memory)
+                    if 'error' in result:
+                        # Failed result - show error message
+                        error_type = result['error']
+                        if is_2d:
+                            f.write(f"| {discretization} | {gp['nx']} | {gp['ny']} | {gp['nt']} | "
+                                    f"- | - | - | ✗ ({error_type}) |\n")
+                        else:
+                            f.write(f"| {discretization} | {gp['nx']} | {gp['nt']} | "
+                                    f"- | - | - | ✗ ({error_type}) |\n")
                     else:
-                        f.write(f"| {discretization} | {gp['nx']} | {gp['nt']} | "
-                                f"{result['total_dofs']:,} | {m['rel_error_pct']:.2f} | "
-                                f"{m['mse']:.2e} | {status} |\n")
+                        # Successful result
+                        m = result['metrics']
+                        status = "✓" if m['is_valid'] else "✗"
+
+                        if is_2d:
+                            f.write(f"| {discretization} | {gp['nx']} | {gp['ny']} | {gp['nt']} | "
+                                    f"{result['total_dofs']:,} | {m['rel_error_pct']:.2f} | "
+                                    f"{m['mse']:.2e} | {status} |\n")
+                        else:
+                            f.write(f"| {discretization} | {gp['nx']} | {gp['nt']} | "
+                                    f"{result['total_dofs']:,} | {m['rel_error_pct']:.2f} | "
+                                    f"{m['mse']:.2e} | {status} |\n")
 
             f.write("\n")
 
@@ -205,23 +218,41 @@ def export_to_csv(results: Dict[str, Dict[str, List[Dict[str, Any]]]], filename:
             for discretization, bench_results in solver_results.items():
                 for result in bench_results:
                     gp = result['grid_params']
-                    m = result['metrics']
-                    status = 'PASS' if m['is_valid'] else 'FAIL'
-
                     ny = gp.get('ny', '')  # Empty if not 2D
 
-                    writer.writerow([
-                        problem_name,
-                        params_str,
-                        discretization,
-                        gp['nx'],
-                        ny,
-                        gp['nt'],
-                        result['total_dofs'],
-                        f"{m['rel_error_pct']:.2f}",
-                        f"{m['mse']:.2e}",
-                        status
-                    ])
+                    # Check if this result has an error (e.g., out of memory)
+                    if 'error' in result:
+                        # Failed result
+                        error_type = result['error']
+                        writer.writerow([
+                            problem_name,
+                            params_str,
+                            discretization,
+                            gp['nx'],
+                            ny,
+                            gp['nt'],
+                            '-',
+                            '-',
+                            '-',
+                            f'ERROR_{error_type}'
+                        ])
+                    else:
+                        # Successful result
+                        m = result['metrics']
+                        status = 'PASS' if m['is_valid'] else 'FAIL'
+
+                        writer.writerow([
+                            problem_name,
+                            params_str,
+                            discretization,
+                            gp['nx'],
+                            ny,
+                            gp['nt'],
+                            result['total_dofs'],
+                            f"{m['rel_error_pct']:.2f}",
+                            f"{m['mse']:.2e}",
+                            status
+                        ])
 
     print(f"✓ CSV table saved to: {filename}")
 
@@ -252,7 +283,7 @@ def export_to_latex(results: Dict[str, Dict[str, List[Dict[str, Any]]]], filenam
 
             # Determine if 2D
             first_result = next(iter(solver_results.values()))[0] if solver_results else None
-            is_2d = first_result and 'ny' in first_result['grid_params']
+            is_2d = first_result and 'ny' in first_result.get('grid_params', {})
 
             # Table
             f.write("\\begin{table}[h]\n")
@@ -273,15 +304,28 @@ def export_to_latex(results: Dict[str, Dict[str, List[Dict[str, Any]]]], filenam
                 disc_latex = discretization.replace('_', '\\_')
                 for result in bench_results:
                     gp = result['grid_params']
-                    m = result['metrics']
-                    status = "\\checkmark" if m['is_valid'] else "\\times"
 
-                    if is_2d:
-                        f.write(f"{disc_latex} & {gp['nx']} & {gp['ny']} & {gp['nt']} & "
-                                f"{result['total_dofs']} & {m['rel_error_pct']:.2f} & {status} \\\\\n")
+                    # Check if this result has an error (e.g., out of memory)
+                    if 'error' in result:
+                        # Failed result
+                        error_type = result['error'].replace('_', '\\_')
+                        if is_2d:
+                            f.write(f"{disc_latex} & {gp['nx']} & {gp['ny']} & {gp['nt']} & "
+                                    f"{{-}} & {{-}} & \\times ({error_type}) \\\\\n")
+                        else:
+                            f.write(f"{disc_latex} & {gp['nx']} & {gp['nt']} & "
+                                    f"{{-}} & {{-}} & \\times ({error_type}) \\\\\n")
                     else:
-                        f.write(f"{disc_latex} & {gp['nx']} & {gp['nt']} & "
-                                f"{result['total_dofs']} & {m['rel_error_pct']:.2f} & {status} \\\\\n")
+                        # Successful result
+                        m = result['metrics']
+                        status = "\\checkmark" if m['is_valid'] else "\\times"
+
+                        if is_2d:
+                            f.write(f"{disc_latex} & {gp['nx']} & {gp['ny']} & {gp['nt']} & "
+                                    f"{result['total_dofs']} & {m['rel_error_pct']:.2f} & {status} \\\\\n")
+                        else:
+                            f.write(f"{disc_latex} & {gp['nx']} & {gp['nt']} & "
+                                    f"{result['total_dofs']} & {m['rel_error_pct']:.2f} & {status} \\\\\n")
 
             f.write("\\bottomrule\n")
             f.write("\\end{tabular}\n")

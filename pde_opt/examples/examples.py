@@ -72,7 +72,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.sigmoid(x)
             # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
-            # x = nn.relu(x)  # Apply ReLU to output layer
+            x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
@@ -246,9 +246,9 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         k = solver.k  # Time step
 
         # Create backward Euler matrix for time-stepping
-        # A = (1/k)*I + K where K is spatial Laplacian
+        # A = (1/k)*I - K where K is negative Laplacian (K_h ≈ -Δ)
         K_h = solver.create_spatial_matrix()
-        A_be = (1.0/k) * jnp.eye(solver.nx) + K_h
+        A_be = (1.0/k) * jnp.eye(solver.nx) - K_h
         L_be = jnp.linalg.cholesky(A_be)
 
         def chol_solve(L, b):
