@@ -90,6 +90,11 @@ def _get_problem_formulas(problem_key: str) -> str:
             'u_0': r'$u_0(x) = \sin(10\pi x)$',
             'f': r'$f(x,t) = \sin(10\pi x)[100\pi^2\cos(10\pi t) - 10\pi\sin(10\pi t)]$'
         },
+        'heat-1d-mixed': {
+            'u': r'$u(x,t) = \sin(\pi x)(3t - 4t^2)$',
+            'u_0': r'$u_0(x) = 0$',
+            'f': r'$f(x,t) = \sin(\pi x)[(3 - 8t) + \pi^2(3t - 4t^2)]$'
+        },
         'linear-heat-2d[prob=default]': {
             'u': r'$u(x,y,t) = e^{t-t^2}\sin(\pi x)\sin(\pi y)$',
             'u_0': r'$u_0(x,y) = \sin(\pi x)\sin(\pi y)$',

@@ -96,6 +96,7 @@ def benchmark_single_config(
         'heat-1d': 'example-3.3',
         'heat-1d-oscillating': 'example-3.3',
         'heat-1d-oscillating-cosine': 'example-3.3',
+        'heat-1d-mixed': 'example-3.3',
         'linear-heat-2d': 'example-3.5',
         'nonlinear-heat-2d': 'example-3.6',
     }

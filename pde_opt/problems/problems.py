@@ -253,6 +253,57 @@ class HeatEquation1DOscillatingCosine(PDEProblem):
         return jnp.sin(jnp.pi * self.omega * X) * jnp.cos(jnp.pi * self.omega * T_mesh)
 
 
+class HeatEquation1DMixed(PDEProblem):
+    """
+    1+1D Heat equation with mixed positive/negative forcing.
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = 0 (zero initial condition)
+
+    Target solution: u(x,t) = sin(πx)·(3t - 4t²)
+    This has smooth spatial structure but forcing that transitions from positive to negative.
+    The forcing is positive for t < ~0.65 and negative for t > ~0.65.
+    """
+
+    def __init__(self, T: float = 1.0):
+        super().__init__(
+            name="1+1D Heat Equation (Mixed Forcing)",
+            description="Heat equation with forcing that has positive and negative regions",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T}
+        )
+        self.T = T
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(πx)·(3t - 4t²).
+
+        Derivation:
+        ∂u/∂t = sin(πx)·(3 - 8t)
+        ∂²u/∂x² = -π²·sin(πx)·(3t - 4t²)
+        f = ∂u/∂t - ∂²u/∂x² = sin(πx)·[(3 - 8t) + π²(3t - 4t²)]
+
+        This forcing is:
+        - Positive for t < ~0.65 (early times)
+        - Negative for t > ~0.65 (late times)
+        - Ranges from ~+6 at early times to ~-9 at t=1
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        spatial = jnp.sin(jnp.pi * X)
+        temporal = (3.0 - 8.0 * T_mesh) + jnp.pi**2 * (3.0 * T_mesh - 4.0 * T_mesh**2)
+        return spatial * temporal
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero initial condition."""
+        return jnp.zeros_like(x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(πx)·(3t - 4t²)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(jnp.pi * X) * (3.0 * T_mesh - 4.0 * T_mesh**2)
+
+
 class LinearHeat2D(PDEProblem):
     """
     2+1D Linear heat equation (same as nonlinear but without u² term).
@@ -460,6 +511,7 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'heat-1d': HeatEquation1D,
         'heat-1d-oscillating': HeatEquation1DOscillating,
         'heat-1d-oscillating-cosine': HeatEquation1DOscillatingCosine,
+        'heat-1d-mixed': HeatEquation1DMixed,
         'poisson-2d': Poisson2D,
         'linear-heat-2d': LinearHeat2D,
         'nonlinear-heat-2d': NonlinearHeat2D,
