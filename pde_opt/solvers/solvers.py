@@ -1,6 +1,25 @@
 """
 Solvers module for PDE-constrained optimization with neural network surrogates.
 Implements different discretization methods (FD, FEM) and time-stepping schemes.
+
+LAPLACIAN SIGN CONVENTIONS:
+---------------------------
+All solvers use the NEGATIVE DEFINITE convention for Laplacian matrices:
+  K_h with diagonal = -2/h², off-diagonal = +1/h²
+
+This represents the discrete negative Laplacian: K_h ≈ -Δ
+For the heat equation u_t = Δu + f, we write: u_t - K_h·u = f
+
+This convention is consistently used by all discretization methods:
+  - HeatEquationFD (finite difference)
+  - HeatEquationCrankNicolson
+  - NonlinearHeat2DCrankNicolson
+  - WaveEquationFD
+  - Poisson1DFD, PoissonFD
+  - AdvectionDiffusionFD
+
+Exception: HeatEquationFEM uses the weak form with stiffness matrix K_fem,
+which is naturally positive definite from the bilinear form ∫∇u·∇v.
 """
 
 import jax
@@ -42,9 +61,17 @@ class HeatEquationFD(SpaceTimeSolver):
     """Finite difference solver for 1+1D heat equation using Kronecker products."""
 
     def create_spatial_matrix(self) -> jnp.ndarray:
-        """Create 1D Laplacian matrix K_h with homogeneous Dirichlet BCs (positive definite form)."""
-        diag_main = 2.0 * jnp.ones(self.nx) / (self.h**2)  # POSITIVE (matches working notebook)
-        diag_off = -1.0 * jnp.ones(self.nx-1) / (self.h**2)  # NEGATIVE (matches working notebook)
+        """
+        Create 1D Laplacian matrix K_h with homogeneous Dirichlet BCs.
+
+        Uses NEGATIVE DEFINITE convention: K_h ≈ -Δ (negative Laplacian)
+        - Diagonal: -2/h²
+        - Off-diagonal: +1/h²
+
+        For heat equation u_t = Δu + f, this gives: u_t - K_h·u = f
+        """
+        diag_main = -2.0 * jnp.ones(self.nx) / (self.h**2)
+        diag_off = 1.0 * jnp.ones(self.nx-1) / (self.h**2)
         K = jnp.diag(diag_main) + jnp.diag(diag_off, 1) + jnp.diag(diag_off, -1)
         return K
 
@@ -55,14 +82,20 @@ class HeatEquationFD(SpaceTimeSolver):
 
     @partial(jax.jit, static_argnums=(0,))
     def create_system_matrix(self) -> jnp.ndarray:
-        """Create space-time matrix A_kh using Kronecker products."""
+        """
+        Create space-time matrix A_kh using Kronecker products.
+
+        With negative definite K_h (K_h ≈ -Δ), the backward Euler scheme is:
+        (u_{n+1} - u_n)/k = Δu_{n+1} + f = -K_h·u_{n+1} + f
+        Rearranging: (1/k*I - K_h)·u_{n+1} = u_n/k + f
+        """
         K_h = self.create_spatial_matrix()
         S_k = self.create_temporal_shift_matrix()
         I_k = jnp.eye(self.nt)
         I_h = jnp.eye(self.nx)
 
-        # A_kh = I_k � (1/k*I_h + K_h) - 1/k*S_k � I_h
-        term1 = jnp.kron(I_k, (1.0/self.k)*I_h + K_h)
+        # A_kh = I_k ⊗ (1/k*I_h - K_h) - 1/k*S_k ⊗ I_h
+        term1 = jnp.kron(I_k, (1.0/self.k)*I_h - K_h)  # Changed + to -
         term2 = jnp.kron((1.0/self.k)*S_k, I_h)
         A_kh = term1 - term2
         return A_kh

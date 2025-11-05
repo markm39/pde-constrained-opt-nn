@@ -76,6 +76,11 @@ def validate_solver(example, threshold: float = 0.01, verbose: bool = True) -> T
                                 for t in t_grid], axis=-1)
         f_true = f_true_3d.reshape(n_spatial, solver.nt)
 
+        # Also get forcing at t=0 for Crank-Nicolson force averaging
+        # For 2D, source_term expects scalar time, returns (nx, ny)
+        f_at_t0_2d = problem.source_term(x_grid, y_grid, 0.0)
+        f_at_t0 = f_at_t0_2d.flatten()  # (nx*ny,)
+
         # Setup Crank-Nicolson solver
         A = solver.K  # -Δ (negative Laplacian)
         A_cn = jnp.eye(n_spatial) - (k/2.0) * A
@@ -86,11 +91,18 @@ def validate_solver(example, threshold: float = 0.01, verbose: bool = True) -> T
             u = jsp.solve_triangular(L.T, y, lower=False)
             return u
 
-        # Time-stepping with TRUE forcing
-        def forward_with_true_forcing(u0, f_true):
+        # Time-stepping with TRUE forcing using proper CN force averaging
+        def forward_with_true_forcing(u0, f_true, f_at_t0):
+            # Augment forcing to include t=0 for proper averaging
+            f_augmented = jnp.column_stack([f_at_t0, f_true])  # (nx*ny, nt+1)
+
             def step(u_prev, i):
-                f_n = f_true[:, i]
-                rhs = (jnp.eye(n_spatial) + (k/2.0) * A) @ u_prev + k * f_n
+                # Average force between old and new time levels for 2nd order accuracy
+                f_old = f_augmented[:, i]      # Force at old time level
+                f_new = f_augmented[:, i+1]    # Force at new time level
+                f_avg = 0.5 * (f_old + f_new)  # Trapezoid rule
+
+                rhs = (jnp.eye(n_spatial) + (k/2.0) * A) @ u_prev + k * f_avg
                 u_next = chol_solve(L_cn, rhs)
                 return u_next, u_next
 
@@ -98,7 +110,7 @@ def validate_solver(example, threshold: float = 0.01, verbose: bool = True) -> T
             _, U_seq = lax.scan(step, u0, indices)
             return U_seq  # (nt, nx*ny)
 
-        U_pred = forward_with_true_forcing(u0, f_true)
+        U_pred = forward_with_true_forcing(u0, f_true, f_at_t0)
 
     else:
         # 1D spatial problem (Example 3.3)
@@ -110,32 +122,80 @@ def validate_solver(example, threshold: float = 0.01, verbose: bool = True) -> T
         u_target = problem.analytical_solution(x_grid, t_grid)  # (nx, nt)
         u0 = problem.initial_condition(x_grid)
 
-        # Get TRUE forcing
-        f_true = problem.source_term(x_grid, t_grid)  # (nx, nt)
+        # Get TRUE forcing - for CN, we need forcing at t=0 as well for averaging
+        f_true = problem.source_term(x_grid, t_grid)  # (nx, nt) at t_grid times
+        # Also get forcing at t=0 for Crank-Nicolson force averaging
+        f_at_t0 = problem.source_term(x_grid, jnp.array([0.0]))[:, 0]  # (nx,)
 
-        # Setup backward Euler solver (same as Example33)
-        K_h = solver.create_spatial_matrix()
-        A_be = (1.0/k) * jnp.eye(solver.nx) + K_h
-        L_be = jnp.linalg.cholesky(A_be)
-
+        # Setup time-stepping solver based on discretization method
         def chol_solve(L, b):
             y = jsp.solve_triangular(L, b, lower=True)
             u = jsp.solve_triangular(L.T, y, lower=False)
             return u
 
-        # Time-stepping with TRUE forcing
-        def forward_with_true_forcing(u0, f_true):
-            def step(u_prev, i):
-                f_n = f_true[:, i]
-                rhs = u_prev / k + f_n
-                u_next = chol_solve(L_be, rhs)
-                return u_next, u_next
+        if example.discretization == 'crank-nicolson':
+            # Crank-Nicolson: (I - 0.5*k*K) * u_next = (I + 0.5*k*K) * u_prev + k*f_avg
+            # Note: CN's K is negative definite (diagonal = -2/h²)
+            # For 2nd order accuracy, force should be averaged: f_avg = 0.5*(f_old + f_new)
+            K_h = solver.create_spatial_matrix()
+            A_cn = jnp.eye(solver.nx) - (k/2.0) * K_h
+            B_cn = jnp.eye(solver.nx) + (k/2.0) * K_h
+            L_cn = jnp.linalg.cholesky(A_cn)
 
-            indices = jnp.arange(solver.nt)
-            _, U_seq = lax.scan(step, u0, indices)
-            return U_seq.T  # (nx, nt)
+            def forward_with_true_forcing(u0, f_true, f_at_t0):
+                # Augment forcing to include t=0 for proper averaging
+                # f_augmented[:, i] is force at time just before computing u at t_grid[i]
+                f_augmented = jnp.column_stack([f_at_t0, f_true])  # (nx, nt+1)
 
-        U_pred = forward_with_true_forcing(u0, f_true)
+                def step(u_prev, i):
+                    # Average force between old and new time levels for 2nd order accuracy
+                    f_old = f_augmented[:, i]      # Force at old time level
+                    f_new = f_augmented[:, i+1]    # Force at new time level
+                    f_avg = 0.5 * (f_old + f_new)  # Trapezoid rule
+
+                    rhs = B_cn @ u_prev + k * f_avg
+                    u_next = chol_solve(L_cn, rhs)
+                    return u_next, u_next
+
+                indices = jnp.arange(solver.nt)
+                _, U_seq = lax.scan(step, u0, indices)
+                return U_seq.T  # (nx, nt)
+
+        else:
+            # Backward Euler for FD and FEM
+            if hasattr(solver, 'create_fem_matrices'):
+                # FEM: (M/k + K) * u_next = M/k * u_prev + M * f
+                M, K_h = solver.create_fem_matrices()
+                A_be = M / k + K_h
+            else:
+                # FD: (I/k - K) * u_next = u_prev/k + f
+                # Note: K_h uses negative definite convention (K_h ≈ -Δ)
+                K_h = solver.create_spatial_matrix()
+                A_be = (1.0/k) * jnp.eye(solver.nx) - K_h  # Changed + to -
+
+            L_be = jnp.linalg.cholesky(A_be)
+
+            def forward_with_true_forcing(u0, f_true):
+                def step(u_prev, i):
+                    f_n = f_true[:, i]
+                    if hasattr(solver, 'create_fem_matrices'):
+                        # FEM: rhs = M/k * u_prev + M * f (weak form)
+                        rhs = (M / k) @ u_prev + M @ f_n
+                    else:
+                        # FD: rhs = u_prev/k + f
+                        rhs = u_prev / k + f_n
+                    u_next = chol_solve(L_be, rhs)
+                    return u_next, u_next
+
+                indices = jnp.arange(solver.nt)
+                _, U_seq = lax.scan(step, u0, indices)
+                return U_seq.T  # (nx, nt)
+
+        # Call solver with appropriate arguments
+        if example.discretization == 'crank-nicolson':
+            U_pred = forward_with_true_forcing(u0, f_true, f_at_t0)
+        else:
+            U_pred = forward_with_true_forcing(u0, f_true)
 
     # Compute errors
     if is_2d:
