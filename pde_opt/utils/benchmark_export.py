@@ -72,6 +72,49 @@ def _flatten_convergence_results(results: Dict[str, Any]) -> Dict[str, Dict[str,
     return flattened
 
 
+def _get_problem_formulas(problem_key: str) -> str:
+    """Get LaTeX formulas for u, u_0, and f for a given problem."""
+    formulas = {
+        'heat-1d': {
+            'u': r'$u(x,t) = \sin(\pi x)\sin(\pi t)$',
+            'u_0': r'$u_0(x) = 0$',
+            'f': r'$f(x,t) = \pi\sin(\pi x)[\cos(\pi t) + \pi\sin(\pi t)]$'
+        },
+        'heat-1d-oscillating[n_oscillations=10]': {
+            'u': r'$u(x,t) = \sin(10\pi x)\sin(\pi t)$',
+            'u_0': r'$u_0(x) = 0$',
+            'f': r'$f(x,t) = \pi\sin(10\pi x)[\cos(\pi t) + 100\pi\sin(\pi t)]$'
+        },
+        'heat-1d-oscillating-cosine[n_oscillations=10_T=0.5]': {
+            'u': r'$u(x,t) = \sin(10\pi x)\cos(10\pi t)$',
+            'u_0': r'$u_0(x) = \sin(10\pi x)$',
+            'f': r'$f(x,t) = \sin(10\pi x)[100\pi^2\cos(10\pi t) - 10\pi\sin(10\pi t)]$'
+        },
+        'linear-heat-2d[prob=default]': {
+            'u': r'$u(x,y,t) = e^{t-t^2}\sin(\pi x)\sin(\pi y)$',
+            'u_0': r'$u_0(x,y) = \sin(\pi x)\sin(\pi y)$',
+            'f': r'$f(x,y,t) = (1-2t)e^{t-t^2}\sin(\pi x)\sin(\pi y) + 2\pi^2 e^{t-t^2}\sin(\pi x)\sin(\pi y)$'
+        },
+        'linear-heat-2d[prob=cossinsin]': {
+            'u': r'$u(x,y,t) = \sin(5\pi x)\sin(5\pi y)\sin(5\pi t)$',
+            'u_0': r'$u_0(x,y) = \sin(5\pi x)\sin(5\pi y)$',
+            'f': r'$f(x,y,t) = \sin(5\pi x)\sin(5\pi y)[5\pi\cos(5\pi t) + 50\pi^2\sin(5\pi t)]$'
+        },
+        'nonlinear-heat-2d': {
+            'u': r'$u(x,y,t) = e^{t-t^2}\sin(\pi x)\sin(\pi y)$',
+            'u_0': r'$u_0(x,y) = \sin(\pi x)\sin(\pi y)$',
+            'f': r'$f(x,y,t) = (1-2t)e^{t-t^2}\sin(\pi x)\sin(\pi y) + 2\pi^2 e^{t-t^2}\sin(\pi x)\sin(\pi y) + e^{2(t-t^2)}\sin^2(\pi x)\sin^2(\pi y)$'
+        }
+    }
+
+    if problem_key in formulas:
+        formula_dict = formulas[problem_key]
+        return (f"**Solution:** {formula_dict['u']}\n\n"
+                f"**Initial condition:** {formula_dict['u_0']}\n\n"
+                f"**Source term:** {formula_dict['f']}\n\n")
+    return ""
+
+
 def export_to_markdown(results: Dict[str, Dict[str, List[Dict[str, Any]]]], filename: str) -> None:
     """
     Export benchmark results to Markdown format.
@@ -89,6 +132,11 @@ def export_to_markdown(results: Dict[str, Dict[str, List[Dict[str, Any]]]], file
 
         for problem_key, solver_results in results.items():
             f.write(f"## {problem_key}\n\n")
+
+            # Add problem formulas
+            formulas = _get_problem_formulas(problem_key)
+            if formulas:
+                f.write(formulas)
 
             # Determine if 2D
             first_result = next(iter(solver_results.values()))[0] if solver_results else None
