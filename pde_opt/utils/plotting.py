@@ -297,14 +297,15 @@ def plot_comparison_heatmaps(data1: jnp.ndarray, data2: jnp.ndarray,
     axes[1].set_title(title2)
     plt.colorbar(im2, ax=axes[1], label='Value')
 
-    # Difference
-    diff = jnp.abs(data1 - data2) / (jnp.abs(data1) + 1e-10)
-    im3 = axes[2].imshow(diff.T, aspect='auto', origin='lower', cmap='hot',
+    # Absolute error and relative L2 error
+    abs_error = jnp.abs(data1 - data2)
+    rel_l2_error = jnp.linalg.norm(abs_error.flatten()) / jnp.linalg.norm(data1.flatten())
+    im3 = axes[2].imshow(abs_error.T, aspect='auto', origin='lower', cmap='hot',
                         extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]])
     axes[2].set_xlabel(xlabel)
     axes[2].set_ylabel(ylabel)
-    axes[2].set_title(f'Relative Error (max={jnp.max(diff):.2e})')
-    plt.colorbar(im3, ax=axes[2], label='Relative Error')
+    axes[2].set_title(f'Absolute Error (Rel L2: {rel_l2_error:.2%}, max: {jnp.max(abs_error):.2e})')
+    plt.colorbar(im3, ax=axes[2], label='Absolute Error')
 
     plt.tight_layout()
     return fig
@@ -424,14 +425,15 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             axes[1].set_title('Predicted Solution - Space-Time')
             plt.colorbar(im2, ax=axes[1], label='u(x,t)')
 
-            # Error
-            error = jnp.abs(u_true - u_pred) / (jnp.abs(u_true) + 1e-10)
-            im3 = axes[2].imshow(error.T, aspect='auto', origin='lower', cmap='hot',
+            # Absolute error and relative L2 error
+            abs_error = jnp.abs(u_true - u_pred)
+            rel_l2_error = jnp.linalg.norm(abs_error.flatten()) / jnp.linalg.norm(u_true.flatten())
+            im3 = axes[2].imshow(abs_error.T, aspect='auto', origin='lower', cmap='hot',
                                 extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
             axes[2].set_xlabel('x')
             axes[2].set_ylabel('t')
-            axes[2].set_title(f'Relative Error (max={jnp.max(error):.2e})')
-            plt.colorbar(im3, ax=axes[2], label='Relative Error')
+            axes[2].set_title(f'Absolute Error (Rel L2: {rel_l2_error:.2%}, max: {jnp.max(abs_error):.2e})')
+            plt.colorbar(im3, ax=axes[2], label='Absolute Error')
 
             plt.tight_layout()
             figures['solution_spacetime'] = fig_sol
@@ -455,14 +457,15 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             axes_f[1].set_title('Predicted Force - Space-Time')
             plt.colorbar(im2_f, ax=axes_f[1], label='f(x,t)')
 
-            # Error
-            error_f = jnp.abs(f_true - f_pred) / (jnp.abs(f_true) + 1e-10)
-            im3_f = axes_f[2].imshow(error_f.T, aspect='auto', origin='lower', cmap='hot',
+            # Absolute error and relative L2 error
+            abs_error_f = jnp.abs(f_true - f_pred)
+            rel_l2_error_f = jnp.linalg.norm(abs_error_f.flatten()) / jnp.linalg.norm(f_true.flatten())
+            im3_f = axes_f[2].imshow(abs_error_f.T, aspect='auto', origin='lower', cmap='hot',
                                     extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
             axes_f[2].set_xlabel('x')
             axes_f[2].set_ylabel('t')
-            axes_f[2].set_title(f'Relative Error (max={jnp.max(error_f):.2e})')
-            plt.colorbar(im3_f, ax=axes_f[2], label='Relative Error')
+            axes_f[2].set_title(f'Absolute Error (Rel L2: {rel_l2_error_f:.2%}, max: {jnp.max(abs_error_f):.2e})')
+            plt.colorbar(im3_f, ax=axes_f[2], label='Absolute Error')
 
             plt.tight_layout()
             figures['force_spacetime'] = fig_force

@@ -72,7 +72,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.sigmoid(x)
             # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
-            x = nn.relu(x)  # Apply ReLU to output layer
+            # x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
@@ -83,13 +83,16 @@ class Example31_Poisson1D_ScalarForce(OptimizationExample):
     """Example 3.1: 1D Poisson with scalar force estimation."""
 
     def __init__(self, zero_ic=None, **kwargs):
+        # Allow manual override of grid parameters
+        nx = kwargs.pop('nx', 50)
+
         super().__init__(
             name="Example 3.1: 1D Poisson Scalar Force",
             problem_name="poisson-1d-scalar",
             solver_type="poisson",
             discretization="fd",
             optimization_type="force",
-            grid_params={"nx": 50},
+            grid_params={"nx": nx},
             optimizer_config={"learning_rate": 0.1, "optimizer": "sgd"},
             regularization=0.0
         )
@@ -148,13 +151,16 @@ class Example32_Poisson1D_VectorForce(OptimizationExample):
     """Example 3.2: 1D Poisson with vector force estimation."""
 
     def __init__(self, zero_ic=None, **kwargs):
+        # Allow manual override of grid parameters
+        nx = kwargs.pop('nx', 50)
+
         super().__init__(
             name="Example 3.2: 1D Poisson Vector Force",
             problem_name="poisson-1d-vector",
             solver_type="poisson",
             discretization="fd",
             optimization_type="force",
-            grid_params={"nx": 50},
+            grid_params={"nx": nx},
             optimizer_config={"learning_rate": 0.01, "optimizer": "adam"},
             regularization=0.099
         )
@@ -207,10 +213,17 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
     """Example 3.3: 1+1D Heat equation with neural network force."""
 
     def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d", regularization: float = None, **problem_kwargs):
-        # Adaptive grid resolution based on oscillations
+        # Allow manual override of grid parameters, otherwise compute from oscillations
         n_osc = problem_kwargs.get('n_oscillations', 1)
-        nx = max(149, n_osc * 30)  # At least 30 points per wavelength
-        nt = 50
+
+        if 'nx' in problem_kwargs or 'nt' in problem_kwargs:
+            # Manual grid specification
+            nx = problem_kwargs.pop('nx', 149)
+            nt = problem_kwargs.pop('nt', 50)
+        else:
+            # Adaptive grid resolution based on oscillations
+            nx = max(149, n_osc * 30)  # At least 30 points per wavelength
+            nt = 50
 
         # Adaptive regularization - less for high frequencies (only if not explicitly provided)
         if regularization is None:
@@ -352,8 +365,13 @@ class Example35_LinearHeat2D(OptimizationExample):
 
     def __init__(self, zero_ic=None, regularization: float = 1e-5, prob: str = 'default', **kwargs):
         # Accept zero_ic for compatibility but don't use it
-        # Adaptive grid size based on problem type
-        if prob == 'cossinsin':
+        # Allow manual override of grid parameters, otherwise use defaults based on problem type
+        if 'nx' in kwargs or 'ny' in kwargs or 'nt' in kwargs:
+            # Manual grid specification
+            nx = kwargs.pop('nx', 30)
+            ny = kwargs.pop('ny', 30)
+            nt = kwargs.pop('nt', 50)
+        elif prob == 'cossinsin':
             # Oscillatory problem needs finer grid
             # find_optimal_config() to get < 1% error (needs ~nx=100, ny=100, nt=200)
             nx, ny, nt = 112, 112, 200
@@ -517,13 +535,18 @@ class Example36_NonlinearHeat2D(OptimizationExample):
 
     def __init__(self, zero_ic=None, regularization: float = 1e-5, **kwargs):
         # Accept zero_ic for compatibility but don't use it
+        # Allow manual override of grid parameters
+        nx = kwargs.pop('nx', 30)
+        ny = kwargs.pop('ny', 30)
+        nt = kwargs.pop('nt', 50)
+
         super().__init__(
             name="Example 3.6: 2+1D Nonlinear Heat Equation",
             problem_name="nonlinear-heat-2d",
             solver_type="heat-2d",
             discretization="crank-nicolson",
             optimization_type="force",
-            grid_params={"nx": 30, "ny": 30, "nt": 50},  # 2D spatial grid + time
+            grid_params={"nx": nx, "ny": ny, "nt": nt},  # 2D spatial grid + time
             optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
             regularization=regularization
         )

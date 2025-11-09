@@ -253,6 +253,51 @@ class HeatEquation1DOscillatingCosine(PDEProblem):
         return jnp.sin(jnp.pi * self.omega * X) * jnp.cos(jnp.pi * self.omega * T_mesh)
 
 
+class HeatEquation1DCosine(PDEProblem):
+    """
+    1+1D Heat equation with cosine temporal behavior.
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = sin(2πx) (non-zero initial condition)
+
+    Target solution: u(x,t) = sin(2πx)cos(2πt)
+    This starts from non-zero IC and oscillates with cosine temporal behavior.
+    """
+
+    def __init__(self, T: float = 0.5):
+        super().__init__(
+            name="1+1D Heat Equation (Cosine)",
+            description="Heat equation with cosine temporal oscillation",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T}
+        )
+        self.T = T
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(2πx)cos(2πt).
+
+        Derivation:
+        ∂u/∂t = -2π·sin(2πx)sin(2πt)
+        ∂²u/∂x² = -4π²·sin(2πx)cos(2πt)
+        f = ∂u/∂t - ∂²u/∂x² = sin(2πx)·[4π²·cos(2πt) - 2π·sin(2πt)]
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        spatial = jnp.sin(2 * jnp.pi * X)
+        temporal = 4 * jnp.pi**2 * jnp.cos(2 * jnp.pi * T_mesh) - 2 * jnp.pi * jnp.sin(2 * jnp.pi * T_mesh)
+        return spatial * temporal
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Initial condition: u(x,0) = sin(2πx)"""
+        return jnp.sin(2 * jnp.pi * x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(2πx)cos(2πt)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(2 * jnp.pi * X) * jnp.cos(2 * jnp.pi * T_mesh)
+
+
 class HeatEquation1DMixed(PDEProblem):
     """
     1+1D Heat equation with mixed positive/negative forcing.
@@ -511,6 +556,7 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'heat-1d': HeatEquation1D,
         'heat-1d-oscillating': HeatEquation1DOscillating,
         'heat-1d-oscillating-cosine': HeatEquation1DOscillatingCosine,
+        'heat-1d-cosine': HeatEquation1DCosine,
         'heat-1d-mixed': HeatEquation1DMixed,
         'poisson-2d': Poisson2D,
         'linear-heat-2d': LinearHeat2D,
