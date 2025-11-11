@@ -317,7 +317,8 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
 
             # MSE loss (matching working notebook)
             Nu = u_target.size
-            data_loss = jnp.sum((U_pred.T - u_target)**2) / Nu  # U_pred is (nt,nx), u_target is (nx,nt)
+            # data_loss = jnp.sum((U_pred.T - u_target)**2) / Nu  # U_pred is (nt,nx), u_target is (nx,nt)
+            data_loss = jnp.mean((U_pred.T - u_target)**2)
             reg_loss = self.regularization * jnp.mean(F_pred**2)
 
             return data_loss + reg_loss, (data_loss, reg_loss)
