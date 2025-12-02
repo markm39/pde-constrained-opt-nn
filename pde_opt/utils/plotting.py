@@ -106,7 +106,8 @@ def plot_1d_force(x_grid: jnp.ndarray, f_pred: jnp.ndarray, f_true: Optional[jnp
 
 def plot_spacetime_heatmap(data: jnp.ndarray, x_grid: jnp.ndarray, t_grid: jnp.ndarray,
                            title: str = "Space-Time Evolution", xlabel: str = "x", ylabel: str = "t",
-                           figsize: Tuple[int, int] = (10, 6), cmap: str = 'viridis'):
+                           figsize: Tuple[int, int] = (10, 6), cmap: str = 'viridis',
+                           vmin: Optional[float] = None, vmax: Optional[float] = None):
     """
     Plot 1+1D space-time evolution as heatmap.
 
@@ -119,6 +120,8 @@ def plot_spacetime_heatmap(data: jnp.ndarray, x_grid: jnp.ndarray, t_grid: jnp.n
         ylabel: Y-axis label
         figsize: Figure size
         cmap: Colormap name
+        vmin: Minimum value for color scale (optional)
+        vmax: Maximum value for color scale (optional)
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -127,7 +130,8 @@ def plot_spacetime_heatmap(data: jnp.ndarray, x_grid: jnp.ndarray, t_grid: jnp.n
         data = data.T
 
     im = ax.imshow(data.T, aspect='auto', origin='lower', cmap=cmap,
-                   extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+                   extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
+                   vmin=vmin, vmax=vmax)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -209,7 +213,8 @@ def plot_2d_heatmap(data: jnp.ndarray, x_grid: jnp.ndarray, y_grid: jnp.ndarray,
 def plot_2d_snapshots(data: jnp.ndarray, x_grid: jnp.ndarray, y_grid: jnp.ndarray,
                       t_grid: jnp.ndarray, num_snapshots: int = 4,
                       title_prefix: str = "Solution", xlabel: str = "x", ylabel: str = "y",
-                      figsize: Tuple[int, int] = (12, 10), cmap: str = 'viridis'):
+                      figsize: Tuple[int, int] = (12, 10), cmap: str = 'viridis',
+                      vmin: Optional[float] = None, vmax: Optional[float] = None):
     """
     Plot temporal snapshots of 2+1D solution.
 
@@ -224,9 +229,17 @@ def plot_2d_snapshots(data: jnp.ndarray, x_grid: jnp.ndarray, y_grid: jnp.ndarra
         ylabel: Y-axis label
         figsize: Figure size
         cmap: Colormap name
+        vmin: Minimum value for color scale (optional, computed from data if not provided)
+        vmax: Maximum value for color scale (optional, computed from data if not provided)
     """
     nt = data.shape[2]
     snapshot_indices = np.linspace(0, nt - 1, num_snapshots, dtype=int)
+
+    # Use provided vmin/vmax or compute from data
+    if vmin is None:
+        vmin = float(jnp.min(data))
+    if vmax is None:
+        vmax = float(jnp.max(data))
 
     ncols = min(2, num_snapshots)
     nrows = (num_snapshots + ncols - 1) // ncols
@@ -243,7 +256,8 @@ def plot_2d_snapshots(data: jnp.ndarray, x_grid: jnp.ndarray, y_grid: jnp.ndarra
         ax = axes[row, col]
 
         im = ax.imshow(data[:, :, idx].T, aspect='auto', origin='lower', cmap=cmap,
-                      extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]])
+                      extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]],
+                      vmin=vmin, vmax=vmax)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(f'{title_prefix} at t={t_grid[idx]:.3f}')
@@ -281,9 +295,14 @@ def plot_comparison_heatmaps(data1: jnp.ndarray, data2: jnp.ndarray,
     """
     fig, axes = plt.subplots(1, 3, figsize=figsize)
 
+    # Compute shared color scale for both datasets
+    vmin = min(float(jnp.min(data1)), float(jnp.min(data2)))
+    vmax = max(float(jnp.max(data1)), float(jnp.max(data2)))
+
     # First solution
     im1 = axes[0].imshow(data1.T, aspect='auto', origin='lower', cmap=cmap,
-                        extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]])
+                        extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]],
+                        vmin=vmin, vmax=vmax)
     axes[0].set_xlabel(xlabel)
     axes[0].set_ylabel(ylabel)
     axes[0].set_title(title1)
@@ -291,7 +310,8 @@ def plot_comparison_heatmaps(data1: jnp.ndarray, data2: jnp.ndarray,
 
     # Second solution
     im2 = axes[1].imshow(data2.T, aspect='auto', origin='lower', cmap=cmap,
-                        extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]])
+                        extent=[x_grid[0], x_grid[-1], y_grid[0], y_grid[-1]],
+                        vmin=vmin, vmax=vmax)
     axes[1].set_xlabel(xlabel)
     axes[1].set_ylabel(ylabel)
     axes[1].set_title(title2)
@@ -354,26 +374,44 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             u_true_3d = jnp.stack([problem.analytical_solution(x_grid, y_grid, t)
                                    for t in t_grid], axis=-1)
 
-            # Plot temporal snapshots of solution
-            figures['solution_snapshots'] = plot_2d_snapshots(
-                u_pred, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
-                title_prefix="Predicted Solution", figsize=(12*figsize_scale, 10*figsize_scale)
-            )
-
             # Get true force at different time steps
             f_true_3d = jnp.stack([problem.source_term(x_grid, y_grid, t)
                                    for t in t_grid], axis=-1)
 
+            # Compute shared color scales for solution (true vs predicted)
+            sol_vmin = min(float(jnp.min(u_true_3d)), float(jnp.min(u_pred)))
+            sol_vmax = max(float(jnp.max(u_true_3d)), float(jnp.max(u_pred)))
+
+            # Compute shared color scales for force (true vs predicted)
+            force_vmin = min(float(jnp.min(f_true_3d)), float(jnp.min(f_pred)))
+            force_vmax = max(float(jnp.max(f_true_3d)), float(jnp.max(f_pred)))
+
+            # Plot temporal snapshots of predicted solution
+            figures['solution_snapshots'] = plot_2d_snapshots(
+                u_pred, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
+                title_prefix="Predicted Solution", figsize=(12*figsize_scale, 10*figsize_scale),
+                vmin=sol_vmin, vmax=sol_vmax
+            )
+
+            # Plot temporal snapshots of true solution
+            figures['true_solution_snapshots'] = plot_2d_snapshots(
+                u_true_3d, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
+                title_prefix="True Solution", figsize=(12*figsize_scale, 10*figsize_scale),
+                vmin=sol_vmin, vmax=sol_vmax
+            )
+
             # Plot temporal snapshots of predicted force
             figures['force_snapshots'] = plot_2d_snapshots(
                 f_pred, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
-                title_prefix="Predicted Force", figsize=(12*figsize_scale, 10*figsize_scale)
+                title_prefix="Predicted Force", figsize=(12*figsize_scale, 10*figsize_scale),
+                vmin=force_vmin, vmax=force_vmax
             )
 
             # Plot temporal snapshots of true force
             figures['true_force_snapshots'] = plot_2d_snapshots(
                 f_true_3d, x_grid, y_grid, t_grid, num_snapshots=min(max_snapshots, nt),
-                title_prefix="True Force", figsize=(12*figsize_scale, 10*figsize_scale)
+                title_prefix="True Force", figsize=(12*figsize_scale, 10*figsize_scale),
+                vmin=force_vmin, vmax=force_vmax
             )
 
             # Plot final time comparison for solution
@@ -409,9 +447,14 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             # Plot space-time heatmaps - True vs Predicted Solution
             fig_sol, axes = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
 
+            # Compute shared color scale for true and predicted solutions
+            sol_vmin = min(float(jnp.min(u_true)), float(jnp.min(u_pred)))
+            sol_vmax = max(float(jnp.max(u_true)), float(jnp.max(u_pred)))
+
             # True solution
             im1 = axes[0].imshow(u_true.T, aspect='auto', origin='lower', cmap='viridis',
-                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
+                                vmin=sol_vmin, vmax=sol_vmax)
             axes[0].set_xlabel('x')
             axes[0].set_ylabel('t')
             axes[0].set_title('True Solution - Space-Time')
@@ -419,7 +462,8 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
 
             # Predicted solution
             im2 = axes[1].imshow(u_pred.T, aspect='auto', origin='lower', cmap='viridis',
-                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
+                                vmin=sol_vmin, vmax=sol_vmax)
             axes[1].set_xlabel('x')
             axes[1].set_ylabel('t')
             axes[1].set_title('Predicted Solution - Space-Time')
@@ -441,9 +485,14 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             # Plot space-time heatmaps - True vs Predicted Force
             fig_force, axes_f = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
 
+            # Compute shared color scale for true and predicted forces
+            force_vmin = min(float(jnp.min(f_true)), float(jnp.min(f_pred)))
+            force_vmax = max(float(jnp.max(f_true)), float(jnp.max(f_pred)))
+
             # True force
             im1_f = axes_f[0].imshow(f_true.T, aspect='auto', origin='lower', cmap='viridis',
-                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
+                                    vmin=force_vmin, vmax=force_vmax)
             axes_f[0].set_xlabel('x')
             axes_f[0].set_ylabel('t')
             axes_f[0].set_title('True Force - Space-Time')
@@ -451,7 +500,8 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
 
             # Predicted force
             im2_f = axes_f[1].imshow(f_pred.T, aspect='auto', origin='lower', cmap='viridis',
-                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
+                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
+                                    vmin=force_vmin, vmax=force_vmax)
             axes_f[1].set_xlabel('x')
             axes_f[1].set_ylabel('t')
             axes_f[1].set_title('Predicted Force - Space-Time')

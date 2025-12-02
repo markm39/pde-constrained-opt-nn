@@ -349,6 +349,160 @@ class HeatEquation1DMixed(PDEProblem):
         return jnp.sin(jnp.pi * X) * (3.0 * T_mesh - 4.0 * T_mesh**2)
 
 
+class HeatEquation1DSpatialMixed(PDEProblem):
+    """
+    1+1D Heat equation with spatial sign variation in forcing.
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = 0 (zero initial condition)
+
+    Target solution: u(x,t) = sin(2πx) * sin(πt)
+
+    At each time t, both u and f have spatial sign changes:
+    - Positive for x ∈ (0, 0.5)
+    - Negative for x ∈ (0.5, 1)
+    This tests ReLU networks on spatially varying positive/negative forcing.
+    """
+
+    def __init__(self, T: float = 1.0):
+        super().__init__(
+            name="1+1D Heat Equation (Spatial Mixed)",
+            description="Heat equation with forcing that has spatial positive/negative regions",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T}
+        )
+        self.T = T
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(2πx) * sin(πt).
+
+        Derivation:
+        ∂u/∂t = π·cos(πt)·sin(2πx)
+        ∂²u/∂x² = -4π²·sin(2πx)·sin(πt)
+        f = ∂u/∂t - ∂²u/∂x² = sin(2πx)·[π·cos(πt) + 4π²·sin(πt)]
+
+        The forcing has the same spatial sign pattern as u:
+        - Positive for x ∈ (0, 0.5), negative for x ∈ (0.5, 1)
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        spatial = jnp.sin(2.0 * jnp.pi * X)
+        temporal = jnp.pi * jnp.cos(jnp.pi * T_mesh) + 4.0 * jnp.pi**2 * jnp.sin(jnp.pi * T_mesh)
+        return spatial * temporal
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero initial condition."""
+        return jnp.zeros_like(x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(2πx) * sin(πt)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(2.0 * jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
+
+
+class HeatEquation1DMultiMode(PDEProblem):
+    """
+    1+1D Heat equation with multiple spatial modes.
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = 0 (zero initial condition)
+
+    Target solution: u(x,t) = [sin(πx) - 0.5·sin(2πx)] * sin(πt)
+
+    The superposition of two modes creates multiple zero crossings in x.
+    This tests ReLU networks on complex multi-scale spatial structure.
+    """
+
+    def __init__(self, T: float = 1.0):
+        super().__init__(
+            name="1+1D Heat Equation (Multi-Mode)",
+            description="Heat equation with multi-mode spatial structure",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T}
+        )
+        self.T = T
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = [sin(πx) - 0.5·sin(2πx)] * sin(πt).
+
+        Derivation:
+        ∂u/∂t = π·cos(πt)·[sin(πx) - 0.5·sin(2πx)]
+        ∂²u/∂x² = sin(πt)·[-π²·sin(πx) + 2π²·sin(2πx)]
+        f = ∂u/∂t - ∂²u/∂x²
+          = π·cos(πt)·[sin(πx) - 0.5·sin(2πx)] + π²·sin(πt)·[sin(πx) - 2·sin(2πx)]
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        sin_pi_x = jnp.sin(jnp.pi * X)
+        sin_2pi_x = jnp.sin(2.0 * jnp.pi * X)
+        cos_pi_t = jnp.cos(jnp.pi * T_mesh)
+        sin_pi_t = jnp.sin(jnp.pi * T_mesh)
+
+        term1 = jnp.pi * cos_pi_t * (sin_pi_x - 0.5 * sin_2pi_x)
+        term2 = jnp.pi**2 * sin_pi_t * (sin_pi_x - 2.0 * sin_2pi_x)
+        return term1 + term2
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero initial condition."""
+        return jnp.zeros_like(x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = [sin(πx) - 0.5·sin(2πx)] * sin(πt)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        spatial = jnp.sin(jnp.pi * X) - 0.5 * jnp.sin(2.0 * jnp.pi * X)
+        return spatial * jnp.sin(jnp.pi * T_mesh)
+
+
+class HeatEquation1DSpatialMixedNonzeroIC(PDEProblem):
+    """
+    1+1D Heat equation with spatial sign variation and non-zero initial condition.
+    ∂u/∂t - ∂²u/∂x² = f(x,t), (x,t) ∈ (0,1) × (0,T)
+    u(0,t) = u(1,t) = 0
+    u(x,0) = sin(2πx) (non-zero initial condition with sign changes)
+
+    Target solution: u(x,t) = sin(2πx) * cos(πt)
+
+    Similar spatial structure to HeatEquation1DSpatialMixed but with:
+    - Non-zero IC that itself has spatial sign variation
+    - Cosine temporal behavior (starts at maximum, decays)
+    """
+
+    def __init__(self, T: float = 1.0):
+        super().__init__(
+            name="1+1D Heat Equation (Spatial Mixed, Non-zero IC)",
+            description="Heat equation with spatial sign variation and non-zero IC",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet in space",
+            parameters={"T": T}
+        )
+        self.T = T
+
+    def source_term(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """
+        Force for target solution u(x,t) = sin(2πx) * cos(πt).
+
+        Derivation:
+        ∂u/∂t = -π·sin(πt)·sin(2πx)
+        ∂²u/∂x² = -4π²·sin(2πx)·cos(πt)
+        f = ∂u/∂t - ∂²u/∂x² = sin(2πx)·[-π·sin(πt) + 4π²·cos(πt)]
+        """
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        spatial = jnp.sin(2.0 * jnp.pi * X)
+        temporal = -jnp.pi * jnp.sin(jnp.pi * T_mesh) + 4.0 * jnp.pi**2 * jnp.cos(jnp.pi * T_mesh)
+        return spatial * temporal
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Non-zero initial condition with sign changes: u(x,0) = sin(2πx)"""
+        return jnp.sin(2.0 * jnp.pi * x)
+
+    def analytical_solution(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """Target solution: u(x,t) = sin(2πx) * cos(πt)"""
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(2.0 * jnp.pi * X) * jnp.cos(jnp.pi * T_mesh)
+
+
 class LinearHeat2D(PDEProblem):
     """
     2+1D Linear heat equation (same as nonlinear but without u² term).
@@ -558,6 +712,9 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'heat-1d-oscillating-cosine': HeatEquation1DOscillatingCosine,
         'heat-1d-cosine': HeatEquation1DCosine,
         'heat-1d-mixed': HeatEquation1DMixed,
+        'heat-1d-spatial-mixed': HeatEquation1DSpatialMixed,
+        'heat-1d-multimode': HeatEquation1DMultiMode,
+        'heat-1d-spatial-mixed-nonzero-ic': HeatEquation1DSpatialMixedNonzeroIC,
         'poisson-2d': Poisson2D,
         'linear-heat-2d': LinearHeat2D,
         'nonlinear-heat-2d': NonlinearHeat2D,

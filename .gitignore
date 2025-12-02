@@ -72,6 +72,10 @@ checkpoints/
 !docs/*.jpg
 !docs/*.pdf
 
+# Except for notebook results (keep experiment figures)
+!notebooks/results/
+!notebooks/results/**
+
 # Model weights
 *.pth
 *.pt

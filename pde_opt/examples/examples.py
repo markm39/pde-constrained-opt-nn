@@ -72,7 +72,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.sigmoid(x)
             # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
-            # x = nn.relu(x)  # Apply ReLU to output layer
+            x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
