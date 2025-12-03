@@ -546,6 +546,31 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             plt.tight_layout()
             figures['solution_snapshots'] = fig_snaps
 
+            # Plot force temporal snapshots - True vs Predicted
+            fig_force_snaps, axes_force_snaps = plt.subplots(2, len(snapshot_indices),
+                                                              figsize=(3*len(snapshot_indices)*figsize_scale, 6*figsize_scale),
+                                                              sharex=True, sharey=True)
+            if len(snapshot_indices) == 1:
+                axes_force_snaps = axes_force_snaps.reshape(2, 1)
+
+            for i, idx in enumerate(snapshot_indices):
+                # True force
+                axes_force_snaps[0, i].plot(x_grid, f_true[:, idx], 'b-', linewidth=2)
+                axes_force_snaps[0, i].set_title(f't={t_grid[idx]:.3f}')
+                axes_force_snaps[0, i].grid(True, alpha=0.3)
+                if i == 0:
+                    axes_force_snaps[0, i].set_ylabel('True f(x,t)')
+
+                # Predicted force
+                axes_force_snaps[1, i].plot(x_grid, f_pred[:, idx], 'r--', linewidth=2)
+                axes_force_snaps[1, i].set_xlabel('x')
+                axes_force_snaps[1, i].grid(True, alpha=0.3)
+                if i == 0:
+                    axes_force_snaps[1, i].set_ylabel('Predicted f(x,t)')
+
+            plt.tight_layout()
+            figures['force_snapshots'] = fig_force_snaps
+
             # Plot comparison at final time
             fig, ax = plt.subplots(figsize=(8*figsize_scale, 5*figsize_scale))
             ax.plot(x_grid, u_true[:, -1], 'b-', linewidth=2, label='True')

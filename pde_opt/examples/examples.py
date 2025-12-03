@@ -343,7 +343,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             return params, opt_state, loss, data_loss, reg_loss
 
         losses = []
-        print(f"Using TIME-STEPPING solver (matches working notebook)")
+        print(f"Using TIME-STEPPING solver")
         for i in range(max_iter):
             params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
             losses.append(float(loss))
