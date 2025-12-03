@@ -280,7 +280,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         use_fourier = n_osc >= 4  # Use Fourier features for high-frequency problems
         fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
 
-        model = create_neural_network([256, 256], 'tanh',
+        model = create_neural_network([256, 256], 'relu',
                                      use_fourier_features=use_fourier,
                                      fourier_scale=fourier_scale)
         key = jax.random.PRNGKey(42)
