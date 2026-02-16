@@ -3,6 +3,9 @@
 from pde_opt.examples.examples import (
     get_example,
     create_neural_network,
+    create_network_from_config,
+    ArchitectureConfig,
+    ARCHITECTURE_CONFIGS,
     OptimizationExample,
     Example31_Poisson1D_ScalarForce,
     Example32_Poisson1D_VectorForce,
@@ -14,6 +17,9 @@ from pde_opt.examples.examples import (
 __all__ = [
     'get_example',
     'create_neural_network',
+    'create_network_from_config',
+    'ArchitectureConfig',
+    'ARCHITECTURE_CONFIGS',
     'OptimizationExample',
     'Example31_Poisson1D_ScalarForce',
     'Example32_Poisson1D_VectorForce',

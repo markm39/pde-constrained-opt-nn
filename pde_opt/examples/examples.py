@@ -7,8 +7,8 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import optax
-from typing import Dict, Any, Tuple, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional
+from dataclasses import dataclass, field
 import matplotlib.pyplot as plt
 
 from pde_opt.solvers import get_solver
@@ -70,13 +70,168 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.relu(x)
                     elif self.activation == 'sigmoid':
                         x = nn.sigmoid(x)
+                    elif self.activation == 'gelu':
+                        x = nn.gelu(x)
+                    elif self.activation == 'silu':
+                        x = nn.silu(x)
             # Output layer with ReLU to ensure non-negative forces
             x = nn.Dense(1)(x)
-            x = nn.relu(x)  # Apply ReLU to output layer
+            # x = nn.relu(x)  # Apply ReLU to output layer
             return x.squeeze(-1)
 
     return Network(layers=hidden_layers, activation=activation,
                    use_fourier=use_fourier_features, fourier_scale=fourier_scale)
+
+
+# --- Configurable architecture system for architecture comparison studies ---
+
+ACTIVATIONS = {
+    'tanh': nn.tanh,
+    'relu': nn.relu,
+    'gelu': nn.gelu,
+    'silu': nn.silu,
+    'sigmoid': nn.sigmoid,
+}
+
+
+@dataclass
+class ArchitectureConfig:
+    """Configuration for a neural network architecture variant."""
+    name: str
+    hidden_layers: List[int] = field(default_factory=lambda: [256, 256])
+    activation: str = 'tanh'
+    arch_type: str = 'mlp'  # 'mlp', 'resnet', 'modified_mlp'
+    use_fourier_features: bool = False
+    fourier_scale: float = 10.0
+
+
+ARCHITECTURE_CONFIGS = [
+    ArchitectureConfig(name="baseline-tanh-256x2", hidden_layers=[256, 256], activation='tanh'),
+    ArchitectureConfig(name="wide-tanh-512x2", hidden_layers=[512, 512], activation='tanh'),
+    ArchitectureConfig(name="deep-tanh-128x4", hidden_layers=[128, 128, 128, 128], activation='tanh'),
+    ArchitectureConfig(name="deep-tanh-256x3", hidden_layers=[256, 256, 256], activation='tanh'),
+    ArchitectureConfig(name="gelu-256x2", hidden_layers=[256, 256], activation='gelu'),
+    ArchitectureConfig(name="silu-256x2", hidden_layers=[256, 256], activation='silu'),
+    ArchitectureConfig(name="resnet-tanh-256x4", hidden_layers=[256, 256, 256, 256],
+                       activation='tanh', arch_type='resnet'),
+    ArchitectureConfig(name="modified-mlp-tanh-256x2", hidden_layers=[256, 256],
+                       activation='tanh', arch_type='modified_mlp'),
+    ArchitectureConfig(name="fourier-tanh-256x2", hidden_layers=[256, 256], activation='tanh',
+                       use_fourier_features=True, fourier_scale=10.0),
+    ArchitectureConfig(name="modified-mlp-fourier-256x2", hidden_layers=[256, 256],
+                       activation='tanh', arch_type='modified_mlp',
+                       use_fourier_features=True, fourier_scale=10.0),
+]
+
+
+def create_network_from_config(config: ArchitectureConfig):
+    """
+    Create a neural network from an ArchitectureConfig.
+
+    Supports three architecture types:
+    - 'mlp': Standard MLP (same as create_neural_network but with more activations)
+    - 'resnet': MLP with residual skip connections every 2 layers
+    - 'modified_mlp': Multiplicative gating (Wang et al. 2021) for better gradient flow
+    """
+    act_fn = ACTIVATIONS[config.activation]
+    hidden = config.hidden_layers
+
+    if config.arch_type == 'resnet':
+        return _create_resnet(hidden, act_fn, config)
+    elif config.arch_type == 'modified_mlp':
+        return _create_modified_mlp(hidden, act_fn, config)
+    else:
+        return _create_mlp(hidden, act_fn, config)
+
+
+def _apply_fourier_features(module, x, scale: float):
+    """Apply random Fourier feature encoding to input."""
+    input_dim = x.shape[-1]
+    B = module.param('fourier_B',
+                     nn.initializers.normal(stddev=scale),
+                     (input_dim, 256))
+    x_proj = 2 * jnp.pi * x @ B
+    return jnp.concatenate([jnp.cos(x_proj), jnp.sin(x_proj)], axis=-1)
+
+
+def _create_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
+    """Create a standard MLP."""
+
+    class MLP(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            if config.use_fourier_features:
+                x = _apply_fourier_features(self, x, config.fourier_scale)
+            for i, features in enumerate(hidden):
+                x = nn.Dense(features)(x)
+                if i < len(hidden) - 1:
+                    x = act_fn(x)
+            x = nn.Dense(1)(x)
+            return x.squeeze(-1)
+
+    return MLP()
+
+
+def _create_resnet(hidden: List[int], act_fn, config: ArchitectureConfig):
+    """Create an MLP with residual skip connections every 2 layers."""
+
+    class ResNetMLP(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            if config.use_fourier_features:
+                x = _apply_fourier_features(self, x, config.fourier_scale)
+
+            # Project input to hidden dim
+            h = nn.Dense(hidden[0])(x)
+            h = act_fn(h)
+
+            for i in range(1, len(hidden)):
+                residual = h
+                h = nn.Dense(hidden[i])(h)
+                h = act_fn(h)
+                # Add skip connection every 2 layers (when dims match)
+                if i % 2 == 0 and hidden[i] == hidden[i - 2]:
+                    h = h + residual
+
+            h = nn.Dense(1)(h)
+            return h.squeeze(-1)
+
+    return ResNetMLP()
+
+
+def _create_modified_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
+    """
+    Create a Modified MLP with multiplicative gating (Wang et al. 2021).
+
+    Two input transform branches U and V are computed once, then injected at
+    every hidden layer via: h = h * U + (1 - h) * V
+    This provides a direct path from input features to every layer, mitigating
+    gradient pathology in PDE-constrained optimization.
+    """
+
+    class ModifiedMLP(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            if config.use_fourier_features:
+                x = _apply_fourier_features(self, x, config.fourier_scale)
+
+            # Two input transformation branches
+            U = act_fn(nn.Dense(hidden[0], name='U_dense')(x))
+            V = act_fn(nn.Dense(hidden[0], name='V_dense')(x))
+
+            # First hidden layer from input
+            h = act_fn(nn.Dense(hidden[0])(x))
+
+            # Subsequent hidden layers with multiplicative gating
+            for i in range(1, len(hidden)):
+                h = act_fn(nn.Dense(hidden[i])(h))
+                # Multiplicative interaction with input transforms
+                h = h * U + (1.0 - h) * V
+
+            h = nn.Dense(1)(h)
+            return h.squeeze(-1)
+
+    return ModifiedMLP()
 
 
 class Example31_Poisson1D_ScalarForce(OptimizationExample):
@@ -243,8 +398,16 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         )
         self.problem_kwargs = problem_kwargs
 
-    def run(self, max_iter: int = 2000):
-        """Run the optimization with neural network using TIME-STEPPING."""
+    def run(self, max_iter: int = 2000, model=None, lr_schedule_type: str = 'exponential',
+            seed: int = 42):
+        """Run the optimization with neural network using TIME-STEPPING.
+
+        Args:
+            max_iter: Maximum training iterations
+            model: Optional pre-built Flax model. If None, uses default [256,256] tanh MLP.
+            lr_schedule_type: Learning rate schedule ('exponential' or 'cosine')
+            seed: Random seed for reproducibility
+        """
         from jax import lax
         import jax.scipy.linalg as jsp
 
@@ -275,20 +438,21 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         # Initial condition (use the problem's IC)
         u0 = problem.initial_condition(x_grid)
 
-        # Initialize neural network with adaptive Fourier features
-        n_osc = self.problem_kwargs.get('n_oscillations', 1)
-        use_fourier = n_osc >= 4  # Use Fourier features for high-frequency problems
-        fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
+        # Initialize neural network
+        if model is None:
+            # Default behavior: adaptive Fourier features for oscillating problems
+            n_osc = self.problem_kwargs.get('n_oscillations', 1)
+            use_fourier = n_osc >= 4
+            fourier_scale = float(n_osc) * 2.0 if use_fourier else 1.0
+            model = create_neural_network([256, 256], 'tanh',
+                                         use_fourier_features=use_fourier,
+                                         fourier_scale=fourier_scale)
+            if use_fourier:
+                print(f"Using Fourier features with scale={fourier_scale:.1f} for k={n_osc} oscillations")
 
-        model = create_neural_network([256, 256], 'relu',
-                                     use_fourier_features=use_fourier,
-                                     fourier_scale=fourier_scale)
-        key = jax.random.PRNGKey(42)
+        key = jax.random.PRNGKey(seed)
         dummy = jnp.zeros((1, 2))
         params = model.init(key, dummy)
-
-        if use_fourier:
-            print(f"Using Fourier features with scale={fourier_scale:.1f} for k={n_osc} oscillations")
 
         # Normalize coordinates
         x_norm = 2.0 * x_grid - 1.0
@@ -323,12 +487,21 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
 
             return data_loss + reg_loss, (data_loss, reg_loss)
 
-        # Optimizer (use adam with lr decay like working notebook)
-        lr_schedule = optax.exponential_decay(
-            init_value=self.optimizer_config['learning_rate'],
-            transition_steps=max_iter,
-            decay_rate=0.9
-        )
+        # Optimizer with configurable LR schedule
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0,
+                peak_value=self.optimizer_config['learning_rate'],
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter,
+                end_value=1e-5,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=self.optimizer_config['learning_rate'],
+                transition_steps=max_iter,
+                decay_rate=0.9
+            )
         optimizer = optax.chain(
             optax.clip_by_global_norm(1.0),
             optax.adam(lr_schedule)
