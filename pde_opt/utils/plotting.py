@@ -445,128 +445,79 @@ def plot_example_results(example_name: str, solver, problem, params, losses, for
             f_true = problem.source_term(x_grid, t_grid)
 
             # Plot space-time heatmaps - True vs Predicted Solution
-            fig_sol, axes = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
-
-            # Compute shared color scale for true and predicted solutions
-            sol_vmin = min(float(jnp.min(u_true)), float(jnp.min(u_pred)))
-            sol_vmax = max(float(jnp.max(u_true)), float(jnp.max(u_pred)))
+            fig_sol, axes = plt.subplots(1, 3, figsize=(20*figsize_scale, 5*figsize_scale))
 
             # True solution
-            im1 = axes[0].imshow(u_true.T, aspect='auto', origin='lower', cmap='viridis',
-                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
-                                vmin=sol_vmin, vmax=sol_vmax)
-            axes[0].set_xlabel('x')
-            axes[0].set_ylabel('t')
-            axes[0].set_title('True Solution - Space-Time')
-            plt.colorbar(im1, ax=axes[0], label='u(x,t)')
+            im1 = axes[0].imshow(u_true.T, aspect='auto', cmap='hot')
+            axes[0].set_title('u_traj_true')
+            plt.colorbar(im1, ax=axes[0])
 
             # Predicted solution
-            im2 = axes[1].imshow(u_pred.T, aspect='auto', origin='lower', cmap='viridis',
-                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
-                                vmin=sol_vmin, vmax=sol_vmax)
-            axes[1].set_xlabel('x')
-            axes[1].set_ylabel('t')
-            axes[1].set_title('Predicted Solution - Space-Time')
-            plt.colorbar(im2, ax=axes[1], label='u(x,t)')
+            im2 = axes[1].imshow(u_pred.T, aspect='auto', cmap='hot')
+            axes[1].set_title('u_traj_learned')
+            plt.colorbar(im2, ax=axes[1])
 
-            # Absolute error and relative L2 error
-            abs_error = jnp.abs(u_true - u_pred)
-            rel_l2_error = jnp.linalg.norm(abs_error.flatten()) / jnp.linalg.norm(u_true.flatten())
-            im3 = axes[2].imshow(abs_error.T, aspect='auto', origin='lower', cmap='hot',
-                                extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
-            axes[2].set_xlabel('x')
-            axes[2].set_ylabel('t')
-            axes[2].set_title(f'Absolute Error (Rel L2: {rel_l2_error:.2%}, max: {jnp.max(abs_error):.2e})')
-            plt.colorbar(im3, ax=axes[2], label='Absolute Error')
+            # Difference (signed, not absolute)
+            diff = u_true - u_pred
+            im3 = axes[2].imshow(diff.T, aspect='auto', cmap='RdBu')
+            axes[2].set_title('diff')
+            plt.colorbar(im3, ax=axes[2])
 
             plt.tight_layout()
             figures['solution_spacetime'] = fig_sol
 
             # Plot space-time heatmaps - True vs Predicted Force
-            fig_force, axes_f = plt.subplots(1, 3, figsize=(15*figsize_scale, 5*figsize_scale))
-
-            # Compute shared color scale for true and predicted forces
-            force_vmin = min(float(jnp.min(f_true)), float(jnp.min(f_pred)))
-            force_vmax = max(float(jnp.max(f_true)), float(jnp.max(f_pred)))
+            fig_force, axes_f = plt.subplots(1, 3, figsize=(20*figsize_scale, 5*figsize_scale))
 
             # True force
-            im1_f = axes_f[0].imshow(f_true.T, aspect='auto', origin='lower', cmap='viridis',
-                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
-                                    vmin=force_vmin, vmax=force_vmax)
-            axes_f[0].set_xlabel('x')
-            axes_f[0].set_ylabel('t')
-            axes_f[0].set_title('True Force - Space-Time')
-            plt.colorbar(im1_f, ax=axes_f[0], label='f(x,t)')
+            im1_f = axes_f[0].imshow(f_true.T, aspect='auto', cmap='hot')
+            axes_f[0].set_title('f_traj_true')
+            plt.colorbar(im1_f, ax=axes_f[0])
 
             # Predicted force
-            im2_f = axes_f[1].imshow(f_pred.T, aspect='auto', origin='lower', cmap='viridis',
-                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]],
-                                    vmin=force_vmin, vmax=force_vmax)
-            axes_f[1].set_xlabel('x')
-            axes_f[1].set_ylabel('t')
-            axes_f[1].set_title('Predicted Force - Space-Time')
-            plt.colorbar(im2_f, ax=axes_f[1], label='f(x,t)')
+            im2_f = axes_f[1].imshow(f_pred.T, aspect='auto', cmap='hot')
+            axes_f[1].set_title('f_traj_learned')
+            plt.colorbar(im2_f, ax=axes_f[1])
 
-            # Absolute error and relative L2 error
-            abs_error_f = jnp.abs(f_true - f_pred)
-            rel_l2_error_f = jnp.linalg.norm(abs_error_f.flatten()) / jnp.linalg.norm(f_true.flatten())
-            im3_f = axes_f[2].imshow(abs_error_f.T, aspect='auto', origin='lower', cmap='hot',
-                                    extent=[x_grid[0], x_grid[-1], t_grid[0], t_grid[-1]])
-            axes_f[2].set_xlabel('x')
-            axes_f[2].set_ylabel('t')
-            axes_f[2].set_title(f'Absolute Error (Rel L2: {rel_l2_error_f:.2%}, max: {jnp.max(abs_error_f):.2e})')
-            plt.colorbar(im3_f, ax=axes_f[2], label='Absolute Error')
+            # Difference (signed, not absolute)
+            diff_f = f_true - f_pred
+            im3_f = axes_f[2].imshow(diff_f.T, aspect='auto', cmap='RdBu')
+            axes_f[2].set_title('diff')
+            plt.colorbar(im3_f, ax=axes_f[2])
 
             plt.tight_layout()
             figures['force_spacetime'] = fig_force
 
-            # Plot temporal snapshots - True vs Predicted
-            snapshot_indices = np.linspace(0, nt - 1, min(max_snapshots, nt), dtype=int)
-            fig_snaps, axes_snaps = plt.subplots(2, len(snapshot_indices),
-                                                 figsize=(3*len(snapshot_indices)*figsize_scale, 6*figsize_scale),
-                                                 sharex=True, sharey=True)
-            if len(snapshot_indices) == 1:
-                axes_snaps = axes_snaps.reshape(2, 1)
+            # Plot solution temporal snapshots - True vs Learned overlaid (teammate's format)
+            # Use 3 time slices: beginning, middle, end
+            time_slices_sol = [1, nt//2, nt-2]
+            fig_snaps, axes_snaps = plt.subplots(3, 1, figsize=(12*figsize_scale, 8*figsize_scale))
 
-            for i, idx in enumerate(snapshot_indices):
-                # True solution
-                axes_snaps[0, i].plot(x_grid, u_true[:, idx], 'b-', linewidth=2)
-                axes_snaps[0, i].set_title(f't={t_grid[idx]:.3f}')
-                axes_snaps[0, i].grid(True, alpha=0.3)
-                if i == 0:
-                    axes_snaps[0, i].set_ylabel('True u(x,t)')
-
-                # Predicted solution
-                axes_snaps[1, i].plot(x_grid, u_pred[:, idx], 'r--', linewidth=2)
-                axes_snaps[1, i].set_xlabel('x')
-                axes_snaps[1, i].grid(True, alpha=0.3)
-                if i == 0:
-                    axes_snaps[1, i].set_ylabel('Predicted u(x,t)')
+            for idx_plot, t_idx in enumerate(time_slices_sol):
+                axes_snaps[idx_plot].plot(x_grid, u_true[:, t_idx], 'b-', label='True u', linewidth=2)
+                axes_snaps[idx_plot].plot(x_grid, u_pred[:, t_idx], 'r--', label='Learned u', linewidth=2)
+                axes_snaps[idx_plot].set_xlabel('x')
+                axes_snaps[idx_plot].set_ylabel('u(x,t)')
+                axes_snaps[idx_plot].set_title(f'Solution at t = {t_grid[t_idx]:.3f}')
+                axes_snaps[idx_plot].legend()
+                axes_snaps[idx_plot].grid(True, alpha=0.3)
 
             plt.tight_layout()
             figures['solution_snapshots'] = fig_snaps
 
-            # Plot force temporal snapshots - True vs Predicted
-            fig_force_snaps, axes_force_snaps = plt.subplots(2, len(snapshot_indices),
-                                                              figsize=(3*len(snapshot_indices)*figsize_scale, 6*figsize_scale),
-                                                              sharex=True, sharey=True)
-            if len(snapshot_indices) == 1:
-                axes_force_snaps = axes_force_snaps.reshape(2, 1)
+            # Plot force temporal snapshots - True vs Learned overlaid (teammate's format)
+            # Use 3 time slices: beginning, middle, end
+            time_slices = [1, nt//2, nt-2]
+            fig_force_snaps, axes_force_snaps = plt.subplots(3, 1, figsize=(12*figsize_scale, 8*figsize_scale))
 
-            for i, idx in enumerate(snapshot_indices):
-                # True force
-                axes_force_snaps[0, i].plot(x_grid, f_true[:, idx], 'b-', linewidth=2)
-                axes_force_snaps[0, i].set_title(f't={t_grid[idx]:.3f}')
-                axes_force_snaps[0, i].grid(True, alpha=0.3)
-                if i == 0:
-                    axes_force_snaps[0, i].set_ylabel('True f(x,t)')
-
-                # Predicted force
-                axes_force_snaps[1, i].plot(x_grid, f_pred[:, idx], 'r--', linewidth=2)
-                axes_force_snaps[1, i].set_xlabel('x')
-                axes_force_snaps[1, i].grid(True, alpha=0.3)
-                if i == 0:
-                    axes_force_snaps[1, i].set_ylabel('Predicted f(x,t)')
+            for idx_plot, t_idx in enumerate(time_slices):
+                axes_force_snaps[idx_plot].plot(x_grid, f_true[:, t_idx], 'b-', label='True f', linewidth=2)
+                axes_force_snaps[idx_plot].plot(x_grid, f_pred[:, t_idx], 'r--', label='Learned f', linewidth=2)
+                axes_force_snaps[idx_plot].set_xlabel('x')
+                axes_force_snaps[idx_plot].set_ylabel('f(x,t)')
+                axes_force_snaps[idx_plot].set_title(f'Forcing at t = {t_grid[t_idx]:.3f}')
+                axes_force_snaps[idx_plot].legend()
+                axes_force_snaps[idx_plot].grid(True, alpha=0.3)
 
             plt.tight_layout()
             figures['force_snapshots'] = fig_force_snaps
