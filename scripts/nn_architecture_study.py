@@ -19,13 +19,13 @@ import json
 import csv
 import sys
 import time
+import os
 from pathlib import Path
 from dataclasses import asdict
 
 import jax
 import jax.numpy as jnp
-import matplotlib
-matplotlib.use('Agg')
+os.environ.setdefault('MPLBACKEND', 'Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 

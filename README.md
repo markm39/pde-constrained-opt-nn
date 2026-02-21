@@ -34,3 +34,12 @@ automatic differentiation and neural network surrogates},
   year={2024}
 }
 ```
+
+## Architecture Study Scripts
+
+- Baseline architecture study:
+  - `python scripts/nn_architecture_study.py --dry-run`
+  - `python scripts/nn_architecture_study.py --max-iter 3000`
+- Fourier-space architecture study:
+  - `python scripts/nn_fourier_study.py --dry-run`
+  - `python scripts/nn_fourier_study.py --input-schemes state_time,state_only,time_only --mode-budgets 8,16,32,full`

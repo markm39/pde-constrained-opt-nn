@@ -9,7 +9,7 @@ Based on: https://arxiv.org/abs/2408.12404
 
 from pde_opt.examples import (
     get_example, create_neural_network, create_network_from_config,
-    ArchitectureConfig, ARCHITECTURE_CONFIGS,
+    ArchitectureConfig, ARCHITECTURE_CONFIGS, resolve_fourier_mode_count,
 )
 from pde_opt.problems import get_problem
 from pde_opt.solvers import get_solver
@@ -24,6 +24,7 @@ __all__ = [
     'create_network_from_config',
     'ArchitectureConfig',
     'ARCHITECTURE_CONFIGS',
+    'resolve_fourier_mode_count',
     'get_problem',
     'get_solver',
     'validate_solver',

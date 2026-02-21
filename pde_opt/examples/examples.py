@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import optax
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 from dataclasses import dataclass, field
 import matplotlib.pyplot as plt
 
@@ -30,7 +30,8 @@ class OptimizationExample:
 
 
 def create_neural_network(hidden_layers: list = [256, 256], activation: str = 'tanh',
-                         use_fourier_features: bool = False, fourier_scale: float = 10.0):
+                         use_fourier_features: bool = False, fourier_scale: float = 10.0,
+                         output_dim: int = 1):
     """
     Create a neural network for force/parameter approximation.
 
@@ -39,6 +40,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
         activation: Activation function ('tanh', 'relu', 'sigmoid')
         use_fourier_features: Whether to use Fourier feature encoding for high-frequency learning
         fourier_scale: Scale parameter for random Fourier features (higher = more high-freq)
+        output_dim: Number of outputs per sample
     """
 
     class Network(nn.Module):
@@ -46,6 +48,7 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
         activation: str
         use_fourier: bool = False
         fourier_scale: float = 10.0
+        output_dim: int = 1
 
         @nn.compact
         def __call__(self, x):
@@ -74,13 +77,14 @@ def create_neural_network(hidden_layers: list = [256, 256], activation: str = 't
                         x = nn.gelu(x)
                     elif self.activation == 'silu':
                         x = nn.silu(x)
-            # Output layer with ReLU to ensure non-negative forces
-            x = nn.Dense(1)(x)
-            # x = nn.relu(x)  # Apply ReLU to output layer
-            return x.squeeze(-1)
+            x = nn.Dense(self.output_dim)(x)
+            if self.output_dim == 1:
+                return x.squeeze(-1)
+            return x
 
     return Network(layers=hidden_layers, activation=activation,
-                   use_fourier=use_fourier_features, fourier_scale=fourier_scale)
+                   use_fourier=use_fourier_features, fourier_scale=fourier_scale,
+                   output_dim=output_dim)
 
 
 # --- Configurable architecture system for architecture comparison studies ---
@@ -124,7 +128,7 @@ ARCHITECTURE_CONFIGS = [
 ]
 
 
-def create_network_from_config(config: ArchitectureConfig):
+def create_network_from_config(config: ArchitectureConfig, output_dim: int = 1):
     """
     Create a neural network from an ArchitectureConfig.
 
@@ -137,11 +141,11 @@ def create_network_from_config(config: ArchitectureConfig):
     hidden = config.hidden_layers
 
     if config.arch_type == 'resnet':
-        return _create_resnet(hidden, act_fn, config)
+        return _create_resnet(hidden, act_fn, config, output_dim=output_dim)
     elif config.arch_type == 'modified_mlp':
-        return _create_modified_mlp(hidden, act_fn, config)
+        return _create_modified_mlp(hidden, act_fn, config, output_dim=output_dim)
     else:
-        return _create_mlp(hidden, act_fn, config)
+        return _create_mlp(hidden, act_fn, config, output_dim=output_dim)
 
 
 def _apply_fourier_features(module, x, scale: float):
@@ -154,7 +158,7 @@ def _apply_fourier_features(module, x, scale: float):
     return jnp.concatenate([jnp.cos(x_proj), jnp.sin(x_proj)], axis=-1)
 
 
-def _create_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
+def _create_mlp(hidden: List[int], act_fn, config: ArchitectureConfig, output_dim: int = 1):
     """Create a standard MLP."""
 
     class MLP(nn.Module):
@@ -166,13 +170,15 @@ def _create_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
                 x = nn.Dense(features)(x)
                 if i < len(hidden) - 1:
                     x = act_fn(x)
-            x = nn.Dense(1)(x)
-            return x.squeeze(-1)
+            x = nn.Dense(output_dim)(x)
+            if output_dim == 1:
+                return x.squeeze(-1)
+            return x
 
     return MLP()
 
 
-def _create_resnet(hidden: List[int], act_fn, config: ArchitectureConfig):
+def _create_resnet(hidden: List[int], act_fn, config: ArchitectureConfig, output_dim: int = 1):
     """Create an MLP with residual skip connections every 2 layers."""
 
     class ResNetMLP(nn.Module):
@@ -193,13 +199,15 @@ def _create_resnet(hidden: List[int], act_fn, config: ArchitectureConfig):
                 if i % 2 == 0 and hidden[i] == hidden[i - 2]:
                     h = h + residual
 
-            h = nn.Dense(1)(h)
-            return h.squeeze(-1)
+            h = nn.Dense(output_dim)(h)
+            if output_dim == 1:
+                return h.squeeze(-1)
+            return h
 
     return ResNetMLP()
 
 
-def _create_modified_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
+def _create_modified_mlp(hidden: List[int], act_fn, config: ArchitectureConfig, output_dim: int = 1):
     """
     Create a Modified MLP with multiplicative gating (Wang et al. 2021).
 
@@ -228,8 +236,10 @@ def _create_modified_mlp(hidden: List[int], act_fn, config: ArchitectureConfig):
                 # Multiplicative interaction with input transforms
                 h = h * U + (1.0 - h) * V
 
-            h = nn.Dense(1)(h)
-            return h.squeeze(-1)
+            h = nn.Dense(output_dim)(h)
+            if output_dim == 1:
+                return h.squeeze(-1)
+            return h
 
     return ModifiedMLP()
 
@@ -530,6 +540,193 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         # Convert back to (nx, nt) for compatibility
         u_final = U_final.T  # (nx, nt)
         force_final = F_final.T  # (nx, nt)
+
+        return params, losses, force_final.flatten(), u_final.flatten()
+
+
+def resolve_fourier_mode_count(mode_budget: Union[str, int], nx: int) -> Tuple[int, int]:
+    """Resolve requested mode budget against rFFT mode count for a spatial grid."""
+    full_modes = nx // 2 + 1
+
+    if isinstance(mode_budget, str):
+        budget = mode_budget.strip().lower()
+        if budget == 'full':
+            requested = full_modes
+        else:
+            requested = int(budget)
+    else:
+        requested = int(mode_budget)
+
+    if requested <= 0:
+        raise ValueError(f"mode_budget must be positive or 'full', got: {mode_budget}")
+
+    return min(requested, full_modes), full_modes
+
+
+def fourier_complex_to_realimag(coeffs: jnp.ndarray) -> jnp.ndarray:
+    """Encode complex Fourier coefficients as concatenated real/imag channels."""
+    return jnp.concatenate([jnp.real(coeffs), jnp.imag(coeffs)], axis=-1)
+
+
+def fourier_realimag_to_complex(features: jnp.ndarray) -> jnp.ndarray:
+    """Decode concatenated real/imag channels back to complex coefficients."""
+    if features.shape[-1] % 2 != 0:
+        raise ValueError(f"Expected even feature size for real/imag encoding, got {features.shape[-1]}")
+    half = features.shape[-1] // 2
+    return features[..., :half] + 1j * features[..., half:]
+
+
+class Example33_HeatEquation_ForceNNFourier(Example33_HeatEquation_ForceNN):
+    """Example 3.3 variant with neural-network I/O in spatial Fourier space."""
+
+    VALID_INPUT_SCHEMES = ('state_time', 'state_only', 'time_only')
+
+    def __init__(self, discretization: str = "fd", problem_name: str = "heat-1d",
+                 regularization: float = None, **problem_kwargs):
+        super().__init__(
+            discretization=discretization,
+            problem_name=problem_name,
+            regularization=regularization,
+            **problem_kwargs,
+        )
+        self.name = f"Example 3.3: Heat Equation with Fourier-Space NN Force ({discretization.upper()})"
+
+    def run(self, max_iter: int = 2000, model=None, lr_schedule_type: str = 'exponential',
+            seed: int = 42, input_scheme: str = 'state_time',
+            mode_budget: Union[str, int] = 'full'):
+        """Run optimization with spectral NN I/O and physical-space time stepping."""
+        from jax import lax
+        import jax.scipy.linalg as jsp
+
+        if input_scheme not in self.VALID_INPUT_SCHEMES:
+            valid = ', '.join(self.VALID_INPUT_SCHEMES)
+            raise ValueError(f"Unknown input_scheme '{input_scheme}'. Expected one of: {valid}")
+
+        problem = get_problem(self.problem_name, **self.problem_kwargs)
+        T = self.problem_kwargs.get('T', 1.0)
+        solver = get_solver(self.solver_type, self.discretization,
+                            nx=self.grid_params['nx'], nt=self.grid_params['nt'], T=T)
+
+        x_grid = solver.x_grid
+        t_grid = solver.t_grid
+        k = solver.k
+
+        K_h = solver.create_spatial_matrix()
+        A_be = (1.0 / k) * jnp.eye(solver.nx) - K_h
+        L_be = jnp.linalg.cholesky(A_be)
+
+        def chol_solve(L, b):
+            y = jsp.solve_triangular(L, b, lower=True)
+            return jsp.solve_triangular(L.T, y, lower=False)
+
+        u_target = problem.analytical_solution(x_grid, t_grid)
+        u0 = problem.initial_condition(x_grid)
+        t_norm = 2.0 * t_grid / solver.T - 1.0
+
+        n_modes, full_modes = resolve_fourier_mode_count(mode_budget, solver.nx)
+        output_dim = 2 * n_modes
+        if input_scheme == 'time_only':
+            input_dim = 1
+        elif input_scheme == 'state_only':
+            input_dim = 2 * n_modes
+        else:
+            input_dim = 2 * n_modes + 1
+
+        if model is None:
+            model = create_neural_network([256, 256], 'tanh', output_dim=output_dim)
+
+        key = jax.random.PRNGKey(seed)
+        dummy = jnp.zeros((1, input_dim))
+        params = model.init(key, dummy)
+
+        output_probe = model.apply(params, dummy)
+        actual_output_dim = int(output_probe.shape[-1]) if output_probe.ndim == 2 else int(output_probe.shape[0])
+        if actual_output_dim != output_dim:
+            raise ValueError(
+                f"Model output dim ({actual_output_dim}) does not match required Fourier dim ({output_dim})"
+            )
+
+        def build_input_features(u_prev, t_n_norm):
+            if input_scheme == 'time_only':
+                return jnp.array([[t_n_norm]])
+
+            u_hat_full = jnp.fft.rfft(u_prev)
+            u_hat = u_hat_full[:n_modes]
+            state_features = fourier_complex_to_realimag(u_hat)
+
+            if input_scheme == 'state_only':
+                return state_features[None, :]
+
+            t_feature = jnp.array([t_n_norm], dtype=state_features.dtype)
+            return jnp.concatenate([state_features, t_feature], axis=0)[None, :]
+
+        def forward_with_nn(params):
+            def step(u_prev, t_n_norm):
+                in_features = build_input_features(u_prev, t_n_norm)
+                f_hat_features = model.apply(params, in_features)
+                f_hat_features = jnp.ravel(f_hat_features)
+                f_hat_trunc = fourier_realimag_to_complex(f_hat_features)
+
+                if n_modes < full_modes:
+                    f_hat_full = jnp.pad(f_hat_trunc, (0, full_modes - n_modes))
+                else:
+                    f_hat_full = f_hat_trunc
+
+                f_n = jnp.fft.irfft(f_hat_full, n=solver.nx)
+                rhs = u_prev / k + f_n
+                u_next = chol_solve(L_be, rhs)
+                return u_next, (u_next, f_n)
+
+            _, (U_seq, F_seq) = lax.scan(step, u0, t_norm)
+            return U_seq, F_seq
+
+        @jax.jit
+        def loss_fn(params):
+            U_pred, F_pred = forward_with_nn(params)
+            data_loss = jnp.mean((U_pred.T - u_target) ** 2)
+            reg_loss = self.regularization * jnp.mean(F_pred ** 2)
+            return data_loss + reg_loss, (data_loss, reg_loss)
+
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0,
+                peak_value=self.optimizer_config['learning_rate'],
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter,
+                end_value=1e-5,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=self.optimizer_config['learning_rate'],
+                transition_steps=max_iter,
+                decay_rate=0.9
+            )
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adam(lr_schedule)
+        )
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        print(f"Using TIME-STEPPING solver with Fourier-space NN I/O")
+        print(f"Input scheme: {input_scheme} | modes: {n_modes}/{full_modes}")
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+
+            if i % 50 == 0:
+                print(f"ep {i:4d} | L={loss:.6f} | mis={data_loss:.6f} | regF={reg_loss:.6f}")
+
+        U_final, F_final = forward_with_nn(params)
+        u_final = U_final.T
+        force_final = F_final.T
 
         return params, losses, force_final.flatten(), u_final.flatten()
 
@@ -880,6 +1077,7 @@ def get_example(example_name: str, **kwargs):
         'example-3.1': Example31_Poisson1D_ScalarForce,
         'example-3.2': Example32_Poisson1D_VectorForce,
         'example-3.3': Example33_HeatEquation_ForceNN,
+        'example-3.3-fourier': Example33_HeatEquation_ForceNNFourier,
         'example-3.5': Example35_LinearHeat2D,
         'example-3.6': Example36_NonlinearHeat2D,
     }
