@@ -409,7 +409,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         self.problem_kwargs = problem_kwargs
 
     def run(self, max_iter: int = 2000, model=None, lr_schedule_type: str = 'exponential',
-            seed: int = 42):
+            seed: int = 42, nonneg: bool = False):
         """Run the optimization with neural network using TIME-STEPPING.
 
         Args:
@@ -417,6 +417,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             model: Optional pre-built Flax model. If None, uses default [256,256] tanh MLP.
             lr_schedule_type: Learning rate schedule ('exponential' or 'cosine')
             seed: Random seed for reproducibility
+            nonneg: If True, apply ReLU to NN output to enforce non-negative force
         """
         from jax import lax
         import jax.scipy.linalg as jsp
@@ -474,6 +475,8 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
                 # Input for NN at this time step
                 xt = jnp.stack([x_norm, jnp.full_like(x_norm, t_n_norm)], axis=1)
                 f_n = model.apply(params, xt)
+                if nonneg:
+                    f_n = jax.nn.relu(f_n)
 
                 # Backward Euler: A*u_next = u_prev/k + f_n
                 rhs = u_prev / k + f_n

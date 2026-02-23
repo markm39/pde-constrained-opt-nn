@@ -134,6 +134,8 @@ def run(args: argparse.Namespace) -> dict:
         run_kwargs["model"] = model
     if args.seed is not None:
         run_kwargs["seed"] = args.seed
+    if args.nonneg:
+        run_kwargs["nonneg"] = True
     if args.example == "3.3-fourier":
         if args.input_scheme is not None:
             run_kwargs["input_scheme"] = args.input_scheme
@@ -215,7 +217,8 @@ def run(args: argparse.Namespace) -> dict:
         )
 
         # Save figures
-        output_dir = args.output_dir / (arch_name or "default") / ex.problem_name
+        arch_label = (arch_name or "default") + ("-nonneg" if args.nonneg else "")
+        output_dir = args.output_dir / arch_label / ex.problem_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
         for fig_name, fig in figures.items():
@@ -269,6 +272,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reg", type=float, default=None, help="Regularization weight")
     p.add_argument("--prob", default=None, help="Sub-problem variant for Example 3.5")
     p.add_argument("--seed", type=int, default=None, help="Random seed")
+    p.add_argument("--nonneg", action="store_true",
+                    help="Enforce non-negative force via ReLU on NN output")
 
     # Fourier-space specific (example 3.3-fourier)
     p.add_argument("--input-scheme", default=None, choices=["state_time", "state_only", "time_only"],
