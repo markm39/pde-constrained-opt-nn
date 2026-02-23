@@ -409,7 +409,8 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
         self.problem_kwargs = problem_kwargs
 
     def run(self, max_iter: int = 2000, model=None, lr_schedule_type: str = 'exponential',
-            seed: int = 42, nonneg: bool = False):
+            seed: int = 42, nonneg: bool = False, nonneg_mode: str = 'relu',
+            learning_rate: float = None, grad_clip: float = 1.0):
         """Run the optimization with neural network using TIME-STEPPING.
 
         Args:
@@ -417,7 +418,10 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             model: Optional pre-built Flax model. If None, uses default [256,256] tanh MLP.
             lr_schedule_type: Learning rate schedule ('exponential' or 'cosine')
             seed: Random seed for reproducibility
-            nonneg: If True, apply ReLU to NN output to enforce non-negative force
+            nonneg: If True, enforce non-negative force on NN output
+            nonneg_mode: 'relu' or 'softplus' (softplus is smoother, better gradients)
+            learning_rate: Override the default learning rate (3e-3)
+            grad_clip: Max gradient norm for clipping (None to disable)
         """
         from jax import lax
         import jax.scipy.linalg as jsp
@@ -476,7 +480,12 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
                 xt = jnp.stack([x_norm, jnp.full_like(x_norm, t_n_norm)], axis=1)
                 f_n = model.apply(params, xt)
                 if nonneg:
-                    f_n = jax.nn.relu(f_n)
+                    if nonneg_mode == 'softplus':
+                        f_n = jax.nn.softplus(f_n)
+                    elif nonneg_mode == 'square':
+                        f_n = f_n ** 2
+                    else:
+                        f_n = jax.nn.relu(f_n)
 
                 # Backward Euler: A*u_next = u_prev/k + f_n
                 rhs = u_prev / k + f_n
@@ -501,24 +510,28 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             return data_loss + reg_loss, (data_loss, reg_loss)
 
         # Optimizer with configurable LR schedule
+        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
         if lr_schedule_type == 'cosine':
             lr_schedule = optax.warmup_cosine_decay_schedule(
                 init_value=0.0,
-                peak_value=self.optimizer_config['learning_rate'],
+                peak_value=lr,
                 warmup_steps=int(0.05 * max_iter),
                 decay_steps=max_iter,
                 end_value=1e-5,
             )
         else:
             lr_schedule = optax.exponential_decay(
-                init_value=self.optimizer_config['learning_rate'],
+                init_value=lr,
                 transition_steps=max_iter,
                 decay_rate=0.9
             )
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(1.0),
-            optax.adam(lr_schedule)
-        )
+        if grad_clip is not None:
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(grad_clip),
+                optax.adam(lr_schedule)
+            )
+        else:
+            optimizer = optax.adam(lr_schedule)
         opt_state = optimizer.init(params)
 
         @jax.jit
@@ -529,7 +542,7 @@ class Example33_HeatEquation_ForceNN(OptimizationExample):
             return params, opt_state, loss, data_loss, reg_loss
 
         losses = []
-        print(f"Using TIME-STEPPING solver")
+        print(f"Using TIME-STEPPING solver (grad_clip={grad_clip})")
         for i in range(max_iter):
             params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
             losses.append(float(loss))

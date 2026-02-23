@@ -121,6 +121,10 @@ def run(args: argparse.Namespace) -> dict:
         ex_kwargs["n_oscillations"] = args.n_oscillations
     if args.prob is not None:
         ex_kwargs["prob"] = args.prob
+    if args.nx is not None:
+        ex_kwargs["nx"] = args.nx
+    if args.nt is not None:
+        ex_kwargs["nt"] = args.nt
 
     ex = get_example(example_key, **ex_kwargs)
 
@@ -136,6 +140,13 @@ def run(args: argparse.Namespace) -> dict:
         run_kwargs["seed"] = args.seed
     if args.nonneg:
         run_kwargs["nonneg"] = True
+        run_kwargs["nonneg_mode"] = args.nonneg_mode
+    if args.lr is not None:
+        run_kwargs["learning_rate"] = args.lr
+    if args.no_clip:
+        run_kwargs["grad_clip"] = None
+    if args.lr_schedule is not None:
+        run_kwargs["lr_schedule_type"] = args.lr_schedule
     if args.example == "3.3-fourier":
         if args.input_scheme is not None:
             run_kwargs["input_scheme"] = args.input_scheme
@@ -272,8 +283,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reg", type=float, default=None, help="Regularization weight")
     p.add_argument("--prob", default=None, help="Sub-problem variant for Example 3.5")
     p.add_argument("--seed", type=int, default=None, help="Random seed")
+    p.add_argument("--lr-schedule", default=None, choices=["exponential", "cosine"],
+                    help="Learning rate schedule (default: exponential)")
     p.add_argument("--nonneg", action="store_true",
-                    help="Enforce non-negative force via ReLU on NN output")
+                    help="Enforce non-negative force on NN output")
+    p.add_argument("--nonneg-mode", default="relu", choices=["relu", "softplus", "square"],
+                    help="Non-negative activation: relu, softplus, or square (default: relu)")
+    p.add_argument("--lr", type=float, default=None,
+                    help="Override learning rate (default: 3e-3)")
+    p.add_argument("--nx", type=int, default=None,
+                    help="Override spatial grid size (default: problem-dependent)")
+    p.add_argument("--nt", type=int, default=None,
+                    help="Override temporal grid size (default: 50)")
+    p.add_argument("--no-clip", action="store_true",
+                    help="Disable gradient clipping (default: clip_by_global_norm(1.0))")
 
     # Fourier-space specific (example 3.3-fourier)
     p.add_argument("--input-scheme", default=None, choices=["state_time", "state_only", "time_only"],
