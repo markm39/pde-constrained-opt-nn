@@ -86,6 +86,7 @@ def list_options(category: str) -> None:
 def run_vp(args: argparse.Namespace) -> dict:
     """Run a Vlasov-Poisson optimization example and return metrics."""
     import jax
+    import jax.numpy as jnp
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -109,11 +110,14 @@ def run_vp(args: argparse.Namespace) -> dict:
         ex_kwargs["t_final"] = args.T
     if args.nx is not None:
         ex_kwargs["nx"] = args.nx
+    if args.reg is not None:
+        ex_kwargs["regularization"] = args.reg
 
     ex = get_example("example-vp", **ex_kwargs)
 
+    reg_str = f"  |  reg={ex.reg_weight:.1e}" if ex.reg_weight > 0 else ""
     print(f"\n{'='*70}")
-    print(f"  Vlasov-Poisson  |  {ex.problem_name}  |  {ex.cost_type.upper()} cost")
+    print(f"  Vlasov-Poisson  |  {ex.problem_name}  |  {ex.cost_type.upper()} cost{reg_str}")
     print(f"{'='*70}")
 
     # Build run kwargs
@@ -136,10 +140,12 @@ def run_vp(args: argparse.Namespace) -> dict:
         "problem": ex.problem_name,
         "cost_function": result.cost_type,
         "n_fourier_modes": ex.n_fourier_modes,
+        "regularization": ex.reg_weight,
         "final_cost": float(result.losses[-1]),
         "electric_energy_final": float(result.ee_array[-1]),
         "electric_energy_baseline": float(result.ee_baseline[-1]),
         "suppression_ratio": float(result.ee_array[-1]) / max(float(result.ee_baseline[-1]), 1e-30),
+        "H_max": float(jnp.max(jnp.abs(result.H_field))),
         "training_time_seconds": round(elapsed, 1),
         "max_iter": args.max_iter,
     }
@@ -149,6 +155,7 @@ def run_vp(args: argparse.Namespace) -> dict:
     print(f"    Electric energy (opt):   {metrics['electric_energy_final']:.6e}")
     print(f"    Electric energy (H=0):   {metrics['electric_energy_baseline']:.6e}")
     print(f"    Suppression ratio:       {metrics['suppression_ratio']:.4f}")
+    print(f"    max|H(x)|:              {metrics['H_max']:.6e}")
 
     # Plotting
     figures = plot_vp_results(result)

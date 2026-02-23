@@ -55,6 +55,7 @@ class ExampleVP_FourierControl(OptimizationExample):
     def __init__(self, problem_name: str = 'vp-two-stream',
                  cost_function: str = 'ee',
                  n_fourier_modes: int = None,
+                 regularization: float = 0.0,
                  **problem_overrides):
         from pde_opt.problems.vlasov_poisson import TwoStreamConfig, BumpOnTailConfig
 
@@ -81,11 +82,12 @@ class ExampleVP_FourierControl(OptimizationExample):
                 "learning_rate": 1.0,
                 "max_linesearch_steps": 15,
             },
-            regularization=0.0,
+            regularization=regularization,
         )
         self.config = config
         self.cost_type = cost_function
         self.n_fourier_modes = n_modes
+        self.reg_weight = regularization
         self.problem_kwargs = problem_overrides
 
     def run(self, max_iter: int = 50, seed: int = 888,
@@ -134,17 +136,27 @@ class ExampleVP_FourierControl(OptimizationExample):
         print(f"  Grid: {config.nx} x {config.nv}, dt={config.dt}, T={t_final}")
         print(f"  Cost function: {self.cost_type.upper()}")
         print(f"  Fourier modes: {self.n_fourier_modes}")
+        if self.reg_weight > 0:
+            print(f"  Regularization: {self.reg_weight:.2e}")
 
         # 2. Build cost function
         if self.cost_type == 'kl':
-            cost_fn = make_cost_function_kl(solver, solver_jit, f_iv, k_0, t_final)
+            base_cost_fn = make_cost_function_kl(solver, solver_jit, f_iv, k_0, t_final)
         elif self.cost_type == 'ee':
-            cost_fn = make_cost_function_ee(solver, solver_jit, f_iv, k_0, t_final)
+            base_cost_fn = make_cost_function_ee(solver, solver_jit, f_iv, k_0, t_final)
         elif self.cost_type == 'eet':
-            cost_fn = make_cost_function_eet(solver, solver_jit, f_iv, k_0, t_final)
+            base_cost_fn = make_cost_function_eet(solver, solver_jit, f_iv, k_0, t_final)
         else:
             raise ValueError(f"Unknown cost function: {self.cost_type}. "
                              f"Available: kl, ee, eet")
+
+        # Wrap with regularization: J(ak) = base_cost(ak) + lambda * ||ak||^2
+        if self.reg_weight > 0:
+            reg_w = self.reg_weight
+            def cost_fn(ak):
+                return base_cost_fn(ak) + reg_w * jnp.sum(ak ** 2)
+        else:
+            cost_fn = base_cost_fn
 
         # 3. Initialize Fourier coefficients
         key = jax.random.PRNGKey(seed)
