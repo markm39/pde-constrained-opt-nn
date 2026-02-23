@@ -48,7 +48,8 @@ ENV/
 *.tmp
 *.cache
 output/
-results/
+results/*
+!results/runs/
 checkpoints/
 
 # Data files
@@ -76,6 +77,9 @@ checkpoints/
 !notebooks/results/
 !notebooks/results/**
 
+# Except for run results (keep script-generated figures and metrics)
+!results/runs/**
+
 # Model weights
 *.pth
 *.pt
@@ -83,7 +87,7 @@ checkpoints/
 *.weights
 
 # Tensorboard
-runs/
+/runs/
 logs/
 tensorboard/
 

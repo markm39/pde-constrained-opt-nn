@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d-mixed",
+  "arch": "fourier-tanh-256x2",
+  "final_loss": 1.9130076907458715e-05,
+  "training_time_seconds": 263.9,
+  "max_iter": 3000,
+  "rel_l2_solution": 0.0002961477730423212,
+  "rel_l2_force": 0.04899479076266289
+}
