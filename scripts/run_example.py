@@ -19,6 +19,12 @@ Usage examples:
     # Run Example 3.3-fourier with Fourier-space I/O
     python scripts/run_example.py --example 3.3-fourier --arch baseline-tanh-256x2 --input-scheme state_time --mode-budget 32
 
+    # Run Vlasov-Poisson two-stream with electric energy cost
+    python scripts/run_example.py --example vp --problem vp-two-stream --cost-fn ee --max-iter 50
+
+    # Run Vlasov-Poisson bump-on-tail with time-integrated energy
+    python scripts/run_example.py --example vp --problem vp-bump-on-tail --cost-fn eet --max-iter 50
+
     # List available options
     python scripts/run_example.py --list-archs
     python scripts/run_example.py --list-problems
@@ -48,6 +54,7 @@ ARCH_NAMES = [
 
 EXAMPLE_NAMES = [
     "3.1", "3.2", "3.3", "3.3-fourier", "3.5", "3.6",
+    "vp",
 ]
 
 PROBLEM_NAMES = [
@@ -57,6 +64,7 @@ PROBLEM_NAMES = [
     "heat-1d-multimode", "heat-1d-spatial-mixed-nonzero-ic",
     "poisson-2d", "linear-heat-2d", "nonlinear-heat-2d",
     "wave-1d", "advection-diffusion-1d",
+    "vp-two-stream", "vp-bump-on-tail",
 ]
 
 # Examples that accept a model= argument in run()
@@ -75,8 +83,101 @@ def list_options(category: str) -> None:
 # Core run logic
 # ---------------------------------------------------------------------------
 
+def run_vp(args: argparse.Namespace) -> dict:
+    """Run a Vlasov-Poisson optimization example and return metrics."""
+    import jax
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from pde_opt.examples import get_example
+    from pde_opt.utils.vp_plotting import plot_vp_results
+
+    print(f"JAX backend: {jax.default_backend()}  |  devices: {jax.devices()}")
+
+    # Build example kwargs
+    ex_kwargs = {}
+    if args.problem is not None:
+        ex_kwargs["problem_name"] = args.problem
+    else:
+        ex_kwargs["problem_name"] = "vp-two-stream"
+    if args.cost_fn is not None:
+        ex_kwargs["cost_function"] = args.cost_fn
+    if args.n_modes is not None:
+        ex_kwargs["n_fourier_modes"] = args.n_modes
+    if args.T is not None:
+        ex_kwargs["t_final"] = args.T
+    if args.nx is not None:
+        ex_kwargs["nx"] = args.nx
+
+    ex = get_example("example-vp", **ex_kwargs)
+
+    print(f"\n{'='*70}")
+    print(f"  Vlasov-Poisson  |  {ex.problem_name}  |  {ex.cost_type.upper()} cost")
+    print(f"{'='*70}")
+
+    # Build run kwargs
+    run_kwargs = {"max_iter": args.max_iter}
+    if args.seed is not None:
+        run_kwargs["seed"] = args.seed
+    if args.vp_optimizer is not None:
+        run_kwargs["optimizer"] = args.vp_optimizer
+    if args.lr is not None:
+        run_kwargs["learning_rate"] = args.lr
+
+    import time
+    t0 = time.perf_counter()
+    result = ex.run(**run_kwargs)
+    elapsed = time.perf_counter() - t0
+
+    # Metrics
+    metrics = {
+        "example": "vp",
+        "problem": ex.problem_name,
+        "cost_function": result.cost_type,
+        "n_fourier_modes": ex.n_fourier_modes,
+        "final_cost": float(result.losses[-1]),
+        "electric_energy_final": float(result.ee_array[-1]),
+        "electric_energy_baseline": float(result.ee_baseline[-1]),
+        "suppression_ratio": float(result.ee_array[-1]) / max(float(result.ee_baseline[-1]), 1e-30),
+        "training_time_seconds": round(elapsed, 1),
+        "max_iter": args.max_iter,
+    }
+
+    print(f"\n  Results ({elapsed:.1f}s):")
+    print(f"    Final cost:              {metrics['final_cost']:.6e}")
+    print(f"    Electric energy (opt):   {metrics['electric_energy_final']:.6e}")
+    print(f"    Electric energy (H=0):   {metrics['electric_energy_baseline']:.6e}")
+    print(f"    Suppression ratio:       {metrics['suppression_ratio']:.4f}")
+
+    # Plotting
+    figures = plot_vp_results(result)
+
+    cost_label = args.cost_fn or "ee"
+    output_dir = args.output_dir / "vp" / f"{ex.problem_name}_{cost_label}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for fig_name, fig in figures.items():
+        filepath = output_dir / f"{fig_name}.png"
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+        size_kb = filepath.stat().st_size / 1024
+        print(f"    Saved: {filepath.relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+
+    metrics_path = output_dir / "metrics.json"
+    with open(metrics_path, "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"    Saved: {metrics_path.relative_to(PROJECT_ROOT)}")
+
+    plt.close("all")
+    return metrics
+
+
 def run(args: argparse.Namespace) -> dict:
     """Run a single example/problem/architecture combo and return metrics."""
+    # VP examples use a separate code path
+    if args.example == "vp":
+        return run_vp(args)
+
     import jax
     import jax.numpy as jnp
     import matplotlib
@@ -303,6 +404,14 @@ def parse_args() -> argparse.Namespace:
                     help="Fourier-space input scheme (3.3-fourier only)")
     p.add_argument("--mode-budget", default=None,
                     help="Fourier mode budget: integer or 'full' (3.3-fourier only)")
+
+    # Vlasov-Poisson specific (example vp)
+    p.add_argument("--cost-fn", default=None, choices=["kl", "ee", "eet"],
+                    help="VP cost function: kl, ee (final energy), eet (time-integrated energy)")
+    p.add_argument("--n-modes", type=int, default=None,
+                    help="Number of Fourier modes for H(x) parameterization (VP only)")
+    p.add_argument("--vp-optimizer", default=None, choices=["linesearch", "adam"],
+                    help="Optimizer for VP examples (default: linesearch)")
 
     # Output
     p.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "results" / "runs",

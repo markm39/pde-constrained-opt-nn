@@ -18,6 +18,13 @@ from pde_opt.examples.examples import (
     Example36_NonlinearHeat2D,
 )
 
+# VP example uses optional dependency (vp_solver)
+try:
+    from pde_opt.examples.vlasov_poisson import ExampleVP_FourierControl, VPResult
+except ImportError:
+    ExampleVP_FourierControl = None
+    VPResult = None
+
 __all__ = [
     'get_example',
     'create_neural_network',
@@ -34,4 +41,6 @@ __all__ = [
     'Example33_HeatEquation_ForceNNFourier',
     'Example35_LinearHeat2D',
     'Example36_NonlinearHeat2D',
+    'ExampleVP_FourierControl',
+    'VPResult',
 ]

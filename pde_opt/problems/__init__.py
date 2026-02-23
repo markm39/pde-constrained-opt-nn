@@ -14,6 +14,11 @@ from pde_opt.problems.problems import (
     WaveEquation1D,
     AdvectionDiffusion1D,
 )
+from pde_opt.problems.vlasov_poisson import (
+    VPProblemConfig,
+    TwoStreamConfig,
+    BumpOnTailConfig,
+)
 
 __all__ = [
     'get_problem',
@@ -28,4 +33,7 @@ __all__ = [
     'Poisson2D',
     'WaveEquation1D',
     'AdvectionDiffusion1D',
+    'VPProblemConfig',
+    'TwoStreamConfig',
+    'BumpOnTailConfig',
 ]

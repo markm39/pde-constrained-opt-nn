@@ -1098,6 +1098,11 @@ def get_example(example_name: str, **kwargs):
         'example-3.6': Example36_NonlinearHeat2D,
     }
 
+    # VP examples use a separate module (lazy import for optional dependency)
+    if example_name == 'example-vp':
+        from pde_opt.examples.vlasov_poisson import ExampleVP_FourierControl
+        return ExampleVP_FourierControl(**kwargs)
+
     if example_name not in examples:
         raise ValueError(f"Unknown example: {example_name}")
 

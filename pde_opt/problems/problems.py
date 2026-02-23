@@ -722,6 +722,17 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'advection-diffusion-1d': AdvectionDiffusion1D,
     }
 
+    # VP problems use a different config type (VPProblemConfig, not PDEProblem)
+    if problem_name.startswith('vp-'):
+        from pde_opt.problems.vlasov_poisson import TwoStreamConfig, BumpOnTailConfig
+        vp_problems = {
+            'vp-two-stream': TwoStreamConfig,
+            'vp-bump-on-tail': BumpOnTailConfig,
+        }
+        if problem_name not in vp_problems:
+            raise ValueError(f"Unknown VP problem: {problem_name}")
+        return vp_problems[problem_name](**kwargs)
+
     if problem_name not in problems:
         raise ValueError(f"Unknown problem: {problem_name}")
 

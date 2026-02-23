@@ -1,10 +1,13 @@
 # JAX and Flax requirements for PDE solver
-jax==0.4.13
-jaxlib==0.4.13
-flax==0.7.0
-optax==0.1.5
+jax>=0.9.0
+jaxlib>=0.9.0
+flax>=0.10.0
+optax>=0.2.0
 matplotlib>=3.5.0
-numpy>=1.24.0,<2.0
-scipy>=1.10.0,<1.13
+numpy>=1.24.0
+scipy>=1.10.0
 jupyter
 ipykernel
+
+# Vlasov-Poisson solver (optional, for VP examples)
+vp-solver @ git+https://github.com/maguerrap/vlasov-poisson.git@main
