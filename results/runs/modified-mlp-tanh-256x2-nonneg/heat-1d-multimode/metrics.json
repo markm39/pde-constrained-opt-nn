@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d-multimode",
+  "arch": "modified-mlp-tanh-256x2",
+  "final_loss": 0.006607006769627333,
+  "training_time_seconds": 203.2,
+  "max_iter": 3000,
+  "rel_l2_solution": 0.14349094033241272,
+  "rel_l2_force": 0.6341726183891296
+}

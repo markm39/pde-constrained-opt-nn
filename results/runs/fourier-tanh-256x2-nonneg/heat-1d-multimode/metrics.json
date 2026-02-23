@@ -2,9 +2,9 @@
   "example": "3.3",
   "problem": "heat-1d-multimode",
   "arch": "fourier-tanh-256x2",
-  "final_loss": 0.009502626955509186,
-  "training_time_seconds": 260.5,
-  "max_iter": 3000,
-  "rel_l2_solution": 0.17252202332019806,
-  "rel_l2_force": 0.727276623249054
+  "final_loss": 0.006582039874047041,
+  "training_time_seconds": 1113.7,
+  "max_iter": 5000,
+  "rel_l2_solution": 0.1432257741689682,
+  "rel_l2_force": 1.1969070434570312
 }

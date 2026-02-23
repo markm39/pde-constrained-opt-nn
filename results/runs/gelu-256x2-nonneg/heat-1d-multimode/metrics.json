@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d-multimode",
+  "arch": "gelu-256x2",
+  "final_loss": 0.009638619609177113,
+  "training_time_seconds": 181.3,
+  "max_iter": 3000,
+  "rel_l2_solution": 0.1738981157541275,
+  "rel_l2_force": 0.6476742029190063
+}

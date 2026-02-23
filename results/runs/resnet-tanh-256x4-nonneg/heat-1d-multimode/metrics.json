@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d-multimode",
+  "arch": "resnet-tanh-256x4",
+  "final_loss": 0.006597488187253475,
+  "training_time_seconds": 381.7,
+  "max_iter": 3000,
+  "rel_l2_solution": 0.1434049755334854,
+  "rel_l2_force": 0.678790807723999
+}
