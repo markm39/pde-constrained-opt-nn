@@ -1,0 +1,9 @@
+{
+  "example": "diffusion",
+  "mode": "nn",
+  "arch": "default",
+  "final_loss": 1.5600035396801104e-07,
+  "rel_l2_coefficient": 0.053456492722034454,
+  "training_time_seconds": 3.4,
+  "max_iter": 5000
+}

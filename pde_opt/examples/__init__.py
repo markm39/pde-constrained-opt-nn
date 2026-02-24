@@ -16,6 +16,9 @@ from pde_opt.examples.examples import (
     Example33_HeatEquation_ForceNNFourier,
     Example35_LinearHeat2D,
     Example36_NonlinearHeat2D,
+    ExampleHelmholtzMedium,
+    ExampleWaveInversion,
+    ExampleDiffusionCoefficient,
 )
 
 # VP example uses optional dependency (vp_solver)
@@ -43,4 +46,7 @@ __all__ = [
     'Example36_NonlinearHeat2D',
     'ExampleVP_FourierControl',
     'VPResult',
+    'ExampleHelmholtzMedium',
+    'ExampleWaveInversion',
+    'ExampleDiffusionCoefficient',
 ]

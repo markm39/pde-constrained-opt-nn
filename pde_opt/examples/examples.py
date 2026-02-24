@@ -104,9 +104,10 @@ class ArchitectureConfig:
     name: str
     hidden_layers: List[int] = field(default_factory=lambda: [256, 256])
     activation: str = 'tanh'
-    arch_type: str = 'mlp'  # 'mlp', 'resnet', 'modified_mlp'
+    arch_type: str = 'mlp'  # 'mlp', 'resnet', 'modified_mlp', 'siren'
     use_fourier_features: bool = False
     fourier_scale: float = 10.0
+    omega_0: float = 30.0  # SIREN frequency parameter
 
 
 ARCHITECTURE_CONFIGS = [
@@ -125,6 +126,10 @@ ARCHITECTURE_CONFIGS = [
     ArchitectureConfig(name="modified-mlp-fourier-256x2", hidden_layers=[256, 256],
                        activation='tanh', arch_type='modified_mlp',
                        use_fourier_features=True, fourier_scale=10.0),
+    ArchitectureConfig(name="siren-256x2", hidden_layers=[256, 256],
+                       arch_type='siren', omega_0=30.0),
+    ArchitectureConfig(name="siren-256x3", hidden_layers=[256, 256, 256],
+                       arch_type='siren', omega_0=30.0),
 ]
 
 
@@ -132,14 +137,18 @@ def create_network_from_config(config: ArchitectureConfig, output_dim: int = 1):
     """
     Create a neural network from an ArchitectureConfig.
 
-    Supports three architecture types:
+    Supports four architecture types:
     - 'mlp': Standard MLP (same as create_neural_network but with more activations)
     - 'resnet': MLP with residual skip connections every 2 layers
     - 'modified_mlp': Multiplicative gating (Wang et al. 2021) for better gradient flow
+    - 'siren': Sinusoidal representation network (Sitzmann et al. 2020)
     """
-    act_fn = ACTIVATIONS[config.activation]
     hidden = config.hidden_layers
 
+    if config.arch_type == 'siren':
+        return _create_siren(hidden, config, output_dim=output_dim)
+
+    act_fn = ACTIVATIONS[config.activation]
     if config.arch_type == 'resnet':
         return _create_resnet(hidden, act_fn, config, output_dim=output_dim)
     elif config.arch_type == 'modified_mlp':
@@ -156,6 +165,56 @@ def _apply_fourier_features(module, x, scale: float):
                      (input_dim, 256))
     x_proj = 2 * jnp.pi * x @ B
     return jnp.concatenate([jnp.cos(x_proj), jnp.sin(x_proj)], axis=-1)
+
+
+def _siren_init(omega_0: float, is_first: bool):
+    """SIREN weight initializer (Sitzmann et al. 2020).
+
+    First layer: uniform(-1/n, 1/n) where n = fan_in.
+    Hidden layers: uniform(-sqrt(6/n)/omega_0, sqrt(6/n)/omega_0).
+    This maintains unit variance of activations through the network.
+    """
+    def init_fn(key, shape, dtype=jnp.float32):
+        fan_in = shape[0]
+        if is_first:
+            limit = 1.0 / fan_in
+        else:
+            limit = jnp.sqrt(6.0 / fan_in) / omega_0
+        return jax.random.uniform(key, shape, dtype, minval=-limit, maxval=limit)
+    return init_fn
+
+
+def _create_siren(hidden: List[int], config: ArchitectureConfig, output_dim: int = 1):
+    """Create a SIREN (Sinusoidal Representation Network).
+
+    Uses sin(omega_0 * Wx + b) activation with specific initialization
+    that maintains unit variance through the network. Particularly effective
+    for problems with oscillatory solutions (Helmholtz, wave equations).
+    """
+    omega_0 = config.omega_0
+
+    class SIREN(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            if config.use_fourier_features:
+                x = _apply_fourier_features(self, x, config.fourier_scale)
+
+            # First hidden layer with omega_0 scaling
+            x = nn.Dense(hidden[0], kernel_init=_siren_init(omega_0, is_first=True))(x)
+            x = jnp.sin(omega_0 * x)
+
+            # Subsequent hidden layers
+            for i in range(1, len(hidden)):
+                x = nn.Dense(hidden[i], kernel_init=_siren_init(omega_0, is_first=False))(x)
+                x = jnp.sin(omega_0 * x)
+
+            # Linear output layer (no activation)
+            x = nn.Dense(output_dim)(x)
+            if output_dim == 1:
+                return x.squeeze(-1)
+            return x
+
+    return SIREN()
 
 
 def _create_mlp(hidden: List[int], act_fn, config: ArchitectureConfig, output_dim: int = 1):
@@ -1077,6 +1136,473 @@ class Example36_NonlinearHeat2D(OptimizationExample):
         return params, losses, force_final.flatten(), u_final.flatten()
 
 
+# --- Inverse coefficient examples ---
+
+
+class ExampleHelmholtzMedium(OptimizationExample):
+    """2D Helmholtz inverse medium: recover refractive index n(x,y).
+
+    Solves: -Delta u - k^2 n(x,y)^2 u = f  with known f, observed u.
+    Optimize n(x,y) parameterized by NN or grid.
+    """
+
+    def __init__(self, k: float = 10 * jnp.pi, nx: int = 50, ny: int = 50,
+                 profile: str = 'gaussian_lens', regularization: float = 1e-4):
+        super().__init__(
+            name=f"Helmholtz Inverse Medium (k={k/jnp.pi:.0f}pi)",
+            problem_name="helmholtz-inverse-2d",
+            solver_type="helmholtz",
+            discretization="2d-fd",
+            optimization_type="coefficient",
+            grid_params={"nx": nx, "ny": ny},
+            optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
+            regularization=regularization,
+        )
+        self.k_wavenum = k
+        self.profile = profile
+
+    def run(self, max_iter: int = 3000, mode: str = 'nn', model=None,
+            lr_schedule_type: str = 'cosine', seed: int = 42,
+            learning_rate: float | None = None):
+        """Run inverse medium recovery.
+
+        Args:
+            max_iter: Training iterations.
+            mode: 'nn' for neural network parameterization, 'grid' for direct grid.
+            model: Optional pre-built Flax model (for NN mode).
+            lr_schedule_type: 'cosine' or 'exponential'.
+            seed: Random seed.
+            learning_rate: Override learning rate (default: 1e-3).
+        """
+        from pde_opt.solvers import Helmholtz2DFD
+
+        nx, ny = self.grid_params['nx'], self.grid_params['ny']
+        problem = get_problem(self.problem_name, k=self.k_wavenum, profile=self.profile)
+        solver = Helmholtz2DFD(nx=nx, ny=ny, k=self.k_wavenum)
+
+        n_spatial = nx * ny
+
+        # Generate observations with true refractive index
+        u_obs = problem.generate_observations(solver)
+        n_true = problem.true_refractive_index(solver.x_grid, solver.y_grid).ravel()
+        f_vec = problem.source_field(solver.x_grid, solver.y_grid)
+
+        key = jax.random.PRNGKey(seed)
+
+        if mode == 'grid':
+            # Direct grid parameterization: optimize raw values, n = 1 + softplus(raw)
+            raw_n = jnp.zeros(n_spatial)  # softplus(0) ~ 0.693, so n ~ 1.693
+
+            @jax.jit
+            def loss_fn(raw_n):
+                n_vec = 1.0 + jax.nn.softplus(raw_n)
+                u_pred = solver.solve(n_vec, f_vec)
+                data_loss = jnp.mean((u_pred - u_obs)**2)
+                reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+            params = raw_n
+        else:
+            # NN parameterization: NN(x, y) -> n(x, y)
+            if model is None:
+                model = create_neural_network([256, 256], 'tanh')
+
+            dummy = jnp.zeros((1, 2))
+            params = model.init(key, dummy)
+
+            # Normalized coordinates
+            x_norm = 2.0 * solver.x_grid / solver.Lx - 1.0
+            y_norm = 2.0 * solver.y_grid / solver.Ly - 1.0
+            X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
+            xy_input = jnp.stack([X_norm.ravel(), Y_norm.ravel()], axis=1)
+
+            @jax.jit
+            def loss_fn(params):
+                n_raw = model.apply(params, xy_input)  # (n_spatial, 1) or (n_spatial,)
+                n_vec = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
+                u_pred = solver.solve(n_vec, f_vec)
+                data_loss = jnp.mean((u_pred - u_obs)**2)
+                reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+        # Optimizer
+        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0, peak_value=lr,
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter, end_value=1e-6,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=lr, transition_steps=max_iter, decay_rate=0.9,
+            )
+        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        print(f"Helmholtz inverse medium | mode={mode} | k={self.k_wavenum/jnp.pi:.1f}*pi | grid={nx}x{ny}")
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+            if i % 100 == 0:
+                print(f"  iter {i:4d} | loss={loss:.6e} | data={data_loss:.6e} | reg={reg_loss:.6e}")
+
+        # Extract final n(x,y)
+        if mode == 'grid':
+            n_final = 1.0 + jax.nn.softplus(params)
+        else:
+            n_raw = model.apply(params, xy_input)
+            n_final = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
+
+        # Metrics
+        rel_l2 = float(jnp.linalg.norm(n_final - n_true) / jnp.linalg.norm(n_true))
+        print(f"  Final relative L2 error in n: {rel_l2:.6f}")
+
+        return params, losses, n_final, n_true
+
+
+class ExampleWaveInversion(OptimizationExample):
+    """2D full waveform inversion: recover wave speed c(x,y) from seismograms.
+
+    Solves: (1/c^2) u_tt - Delta u = f(x,y,t) with known source, partial observations.
+    Optimize c(x,y) parameterized by NN or grid.
+    """
+
+    def __init__(self, nx: int = 40, ny: int = 40, nt: int = 400,
+                 c_profile: str = 'layered', n_receivers: int = 20,
+                 regularization: float = 1e-4, T: float = 1.0,
+                 peak_freq: float = 8.0):
+        super().__init__(
+            name="2D Full Waveform Inversion",
+            problem_name="wave-inversion-2d",
+            solver_type="wave-2d",
+            discretization="fd",
+            optimization_type="coefficient",
+            grid_params={"nx": nx, "ny": ny, "nt": nt},
+            optimizer_config={"learning_rate": 5e-4, "optimizer": "adam"},
+            regularization=regularization,
+        )
+        self.c_profile = c_profile
+        self.n_receivers = n_receivers
+        self.T = T
+        self.peak_freq = peak_freq
+
+    def run(self, max_iter: int = 2000, mode: str = 'nn', model=None,
+            lr_schedule_type: str = 'cosine', seed: int = 42,
+            learning_rate: float | None = None):
+        """Run FWI.
+
+        Args:
+            max_iter: Training iterations.
+            mode: 'nn' or 'grid'.
+            model: Optional Flax model.
+            lr_schedule_type: LR schedule type.
+            seed: Random seed.
+            learning_rate: Override learning rate (default: 5e-4).
+        """
+        from jax import lax
+        from pde_opt.solvers import Wave2DFD
+
+        nx, ny, nt = self.grid_params['nx'], self.grid_params['ny'], self.grid_params['nt']
+        problem = get_problem(self.problem_name, c_profile=self.c_profile,
+                              n_receivers=self.n_receivers, T=self.T,
+                              peak_freq=self.peak_freq)
+
+        solver = Wave2DFD(nx=nx, ny=ny, nt=nt, T=self.T)
+        n_spatial = nx * ny
+        dt = solver.dt
+        K_2d = solver.K_2d
+
+        # True velocity and observations
+        c_true_2d = problem.true_wave_speed(solver.x_grid, solver.y_grid)
+        c_true = c_true_2d.ravel()
+        c_min, c_max = float(c_true.min()) * 0.5, float(c_true.max()) * 1.5
+
+        # Check CFL with max possible velocity
+        if not solver.check_cfl(c_max):
+            print(f"WARNING: CFL condition violated with c_max={c_max:.2f}. "
+                  f"Reduce dt or increase grid resolution.")
+
+        # Source time function
+        source_all = problem.source_time_function(solver.t_grid, solver.x_grid, solver.y_grid)
+
+        # Receiver indices
+        recv_idx = problem.receiver_indices(solver.x_grid, solver.y_grid)
+
+        # Generate observations with true velocity
+        def forward_sim(c_vec, source_all):
+            """Explicit leapfrog wave simulation. Returns receiver traces."""
+            u0 = jnp.zeros(n_spatial)
+
+            def step(carry, f_n):
+                u_curr, u_prev = carry
+                # K_2d approximates Delta (negative semi-definite).
+                # PDE: u_tt = c^2 * (Delta u + f)
+                # Leapfrog: u_next = 2*u - u_prev + dt^2 * c^2 * (K_2d @ u + f)
+                u_next = 2.0 * u_curr - u_prev + dt**2 * c_vec**2 * (K_2d @ u_curr + f_n)
+                return (u_next, u_curr), u_curr[recv_idx]
+
+            _, recv_traces = lax.scan(step, (u0, u0), source_all)
+            return recv_traces  # (nt, n_receivers)
+
+        # Observed seismograms
+        u_obs_recv = forward_sim(c_true, source_all)
+        # Normalize data misfit by observation energy (grid-independent scaling)
+        obs_energy = jnp.mean(u_obs_recv**2) + 1e-30
+
+        key = jax.random.PRNGKey(seed)
+
+        if mode == 'grid':
+            # Direct grid: c = c_min + sigmoid(raw) * (c_max - c_min)
+            # Initialize near the mean
+            c_mean = float(c_true.mean())
+            init_sigmoid = (c_mean - c_min) / (c_max - c_min)
+            raw_c = jnp.full(n_spatial, jnp.log(init_sigmoid / (1.0 - init_sigmoid + 1e-8)))
+
+            @jax.jit
+            def loss_fn(raw_c):
+                c_vec = c_min + jax.nn.sigmoid(raw_c) * (c_max - c_min)
+                recv_pred = forward_sim(c_vec, source_all)
+                data_loss = jnp.mean((recv_pred - u_obs_recv)**2) / obs_energy
+                reg_loss = self.regularization * jnp.mean((c_vec - c_mean)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+            params = raw_c
+        else:
+            # NN parameterization
+            if model is None:
+                model = create_neural_network([256, 256], 'tanh')
+
+            dummy = jnp.zeros((1, 2))
+            params = model.init(key, dummy)
+
+            x_norm = 2.0 * solver.x_grid / solver.Lx - 1.0
+            y_norm = 2.0 * solver.y_grid / solver.Ly - 1.0
+            X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
+            xy_input = jnp.stack([X_norm.ravel(), Y_norm.ravel()], axis=1)
+
+            c_mean = float(c_true.mean())
+
+            @jax.jit
+            def loss_fn(params):
+                c_raw = model.apply(params, xy_input)
+                c_vec = c_min + jax.nn.sigmoid(jnp.ravel(c_raw)) * (c_max - c_min)
+                recv_pred = forward_sim(c_vec, source_all)
+                data_loss = jnp.mean((recv_pred - u_obs_recv)**2) / obs_energy
+                reg_loss = self.regularization * jnp.mean((c_vec - c_mean)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+        # Optimizer
+        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0, peak_value=lr,
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter, end_value=1e-6,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=lr, transition_steps=max_iter, decay_rate=0.9,
+            )
+        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        print(f"FWI | mode={mode} | profile={self.c_profile} | grid={nx}x{ny} | nt={nt} | lr={lr:.1e}")
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+            if i % 100 == 0:
+                print(f"  iter {i:4d} | loss={loss:.6e} | data={data_loss:.6e} | reg={reg_loss:.6e}")
+
+        # Extract final c(x,y)
+        if mode == 'grid':
+            c_final = c_min + jax.nn.sigmoid(params) * (c_max - c_min)
+        else:
+            c_raw = model.apply(params, xy_input)
+            c_final = c_min + jax.nn.sigmoid(jnp.ravel(c_raw)) * (c_max - c_min)
+
+        rel_l2 = float(jnp.linalg.norm(c_final - c_true) / jnp.linalg.norm(c_true))
+        print(f"  Final relative L2 error in c: {rel_l2:.6f}")
+
+        return params, losses, c_final, c_true
+
+
+class ExampleDiffusionCoefficient(OptimizationExample):
+    """1D variable diffusion coefficient recovery from sparse observations.
+
+    PDE: u_t = d/dx(D(x) du/dx) + f(x,t)
+    Recover D(x) from sparse measurements of u.
+    """
+
+    def __init__(self, nx: int = 100, nt: int = 50, D_profile: str = 'sinusoidal',
+                 obs_fraction: float = 0.2, regularization: float = 1e-4, T: float = 1.0):
+        super().__init__(
+            name=f"Diffusion Coefficient Recovery (obs={obs_fraction*100:.0f}%)",
+            problem_name="diffusion-coefficient-1d",
+            solver_type="variable-diffusion",
+            discretization="fd",
+            optimization_type="coefficient",
+            grid_params={"nx": nx, "nt": nt},
+            optimizer_config={"learning_rate": 1e-3, "optimizer": "adam"},
+            regularization=regularization,
+        )
+        self.D_profile = D_profile
+        self.obs_fraction = obs_fraction
+        self.T = T
+
+    def run(self, max_iter: int = 3000, mode: str = 'nn', model=None,
+            lr_schedule_type: str = 'cosine', seed: int = 42,
+            learning_rate: float | None = None):
+        """Run diffusion coefficient recovery.
+
+        Args:
+            max_iter: Training iterations.
+            mode: 'nn' or 'grid'.
+            model: Optional Flax model.
+            lr_schedule_type: LR schedule type.
+            seed: Random seed.
+            learning_rate: Override learning rate (default: 1e-3).
+        """
+        from jax import lax
+        import jax.scipy.linalg as jsp
+        from pde_opt.solvers import VariableDiffusion1DFD
+
+        nx, nt = self.grid_params['nx'], self.grid_params['nt']
+        problem = get_problem(self.problem_name, D_profile=self.D_profile,
+                              obs_fraction=self.obs_fraction, T=self.T, seed=seed)
+
+        solver = VariableDiffusion1DFD(nx=nx, nt=nt, T=self.T)
+        x_grid = solver.x_grid
+        t_grid = solver.t_grid
+        k_dt = solver.k  # time step
+
+        D_true = problem.true_diffusion(x_grid)
+        u0 = problem.initial_condition(x_grid)
+
+        # Compute source at all time steps
+        f_all = problem.source_term(x_grid, t_grid)  # (nx, nt)
+
+        # Observation mask
+        spatial_idx, time_idx = problem.observation_mask(nx, nt)
+
+        # Forward simulation with given D
+        def forward_sim(D_vec):
+            """Backward Euler time-stepping with variable diffusion."""
+            K_D = solver.create_spatial_matrix(D_vec)  # negative semi-definite
+            # Backward Euler: (1/k I - K_D) u_{n+1} = (1/k) u_n + f_n
+            A_be = (1.0 / k_dt) * jnp.eye(nx) - K_D
+            # A_be is SPD since K_D is negative semi-definite
+
+            def step(u_prev, f_n):
+                rhs = u_prev / k_dt + f_n
+                u_next = jnp.linalg.solve(A_be, rhs)
+                return u_next, u_next
+
+            _, U_seq = lax.scan(step, u0, f_all.T)  # f_all.T is (nt, nx)
+            return U_seq  # (nt, nx)
+
+        # Generate observations with true D
+        U_true = forward_sim(D_true)  # (nt, nx)
+        # Extract sparse observations
+        u_obs = U_true[time_idx][:, spatial_idx]  # (n_time_obs, n_spatial_obs)
+
+        key = jax.random.PRNGKey(seed)
+
+        if mode == 'grid':
+            # Direct grid: D = softplus(raw) to ensure positivity
+            raw_D = jnp.zeros(nx)
+
+            @jax.jit
+            def loss_fn(raw_D):
+                D_vec = jax.nn.softplus(raw_D)
+                U_pred = forward_sim(D_vec)
+                u_pred_obs = U_pred[time_idx][:, spatial_idx]
+                data_loss = jnp.mean((u_pred_obs - u_obs)**2)
+                reg_loss = self.regularization * jnp.mean((D_vec - 1.0)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+            params = raw_D
+        else:
+            # NN parameterization
+            if model is None:
+                model = create_neural_network([128, 128], 'tanh')
+
+            dummy = jnp.zeros((1, 1))
+            params = model.init(key, dummy)
+
+            x_norm = (2.0 * x_grid - 1.0)[:, None]  # (nx, 1)
+
+            @jax.jit
+            def loss_fn(params):
+                D_raw = model.apply(params, x_norm)
+                D_vec = jax.nn.softplus(jnp.ravel(D_raw))
+                U_pred = forward_sim(D_vec)
+                u_pred_obs = U_pred[time_idx][:, spatial_idx]
+                data_loss = jnp.mean((u_pred_obs - u_obs)**2)
+                reg_loss = self.regularization * jnp.mean((D_vec - 1.0)**2)
+                return data_loss + reg_loss, (data_loss, reg_loss)
+
+        # Optimizer
+        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0, peak_value=lr,
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter, end_value=1e-6,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=lr, transition_steps=max_iter, decay_rate=0.9,
+            )
+        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(params, opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        n_obs = len(spatial_idx) * len(time_idx)
+        print(f"Diffusion coeff recovery | mode={mode} | D={self.D_profile} | "
+              f"obs={self.obs_fraction*100:.0f}% ({n_obs} points) | lr={lr:.1e}")
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+            if i % 100 == 0:
+                print(f"  iter {i:4d} | loss={loss:.6e} | data={data_loss:.6e} | reg={reg_loss:.6e}")
+
+        # Extract final D(x)
+        if mode == 'grid':
+            D_final = jax.nn.softplus(params)
+        else:
+            D_raw = model.apply(params, x_norm)
+            D_final = jax.nn.softplus(jnp.ravel(D_raw))
+
+        rel_l2 = float(jnp.linalg.norm(D_final - D_true) / jnp.linalg.norm(D_true))
+        print(f"  Final relative L2 error in D: {rel_l2:.6f}")
+
+        return params, losses, D_final, D_true
+
+
 # Factory function to get example by name
 def get_example(example_name: str, **kwargs):
     """
@@ -1096,6 +1622,9 @@ def get_example(example_name: str, **kwargs):
         'example-3.3-fourier': Example33_HeatEquation_ForceNNFourier,
         'example-3.5': Example35_LinearHeat2D,
         'example-3.6': Example36_NonlinearHeat2D,
+        'helmholtz-medium': ExampleHelmholtzMedium,
+        'wave-inversion': ExampleWaveInversion,
+        'diffusion-coefficient': ExampleDiffusionCoefficient,
     }
 
     # VP examples use a separate module (lazy import for optional dependency)

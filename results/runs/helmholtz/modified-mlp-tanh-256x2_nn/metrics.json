@@ -1,0 +1,9 @@
+{
+  "example": "helmholtz",
+  "mode": "nn",
+  "arch": "modified-mlp-tanh-256x2",
+  "final_loss": 7.169132913986687e-06,
+  "rel_l2_coefficient": 0.012700912542641163,
+  "training_time_seconds": 7.7,
+  "max_iter": 2000
+}

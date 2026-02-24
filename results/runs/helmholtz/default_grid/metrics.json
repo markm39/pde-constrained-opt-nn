@@ -1,0 +1,9 @@
+{
+  "example": "helmholtz",
+  "mode": "grid",
+  "arch": "default",
+  "final_loss": 0.023735031485557556,
+  "rel_l2_coefficient": 0.69536954164505,
+  "training_time_seconds": 5.3,
+  "max_iter": 2000
+}

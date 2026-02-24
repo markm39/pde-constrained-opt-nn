@@ -19,6 +19,16 @@ Usage examples:
     # Run Example 3.3-fourier with Fourier-space I/O
     python scripts/run_example.py --example 3.3-fourier --arch baseline-tanh-256x2 --input-scheme state_time --mode-budget 32
 
+    # Run Helmholtz inverse medium with modified-MLP (NN vs grid)
+    python scripts/run_example.py --example helmholtz --arch modified-mlp-tanh-256x2 --mode nn --max-iter 2000
+    python scripts/run_example.py --example helmholtz --mode grid --max-iter 2000
+
+    # Run FWI with default tanh MLP
+    python scripts/run_example.py --example fwi --arch baseline-tanh-256x2 --mode nn --max-iter 300
+
+    # Run diffusion coefficient recovery with sparse observations
+    python scripts/run_example.py --example diffusion --mode nn --obs-fraction 0.1 --max-iter 3000
+
     # Run Vlasov-Poisson two-stream with electric energy cost
     python scripts/run_example.py --example vp --problem vp-two-stream --cost-fn ee --max-iter 50
 
@@ -50,11 +60,13 @@ ARCH_NAMES = [
     "baseline-tanh-256x2", "wide-tanh-512x2", "deep-tanh-128x4",
     "deep-tanh-256x3", "gelu-256x2", "silu-256x2", "resnet-tanh-256x4",
     "modified-mlp-tanh-256x2", "fourier-tanh-256x2", "modified-mlp-fourier-256x2",
+    "siren-256x2", "siren-256x3",
 ]
 
 EXAMPLE_NAMES = [
     "3.1", "3.2", "3.3", "3.3-fourier", "3.5", "3.6",
     "vp",
+    "helmholtz", "fwi", "diffusion",
 ]
 
 PROBLEM_NAMES = [
@@ -68,7 +80,10 @@ PROBLEM_NAMES = [
 ]
 
 # Examples that accept a model= argument in run()
-NN_EXAMPLES = {"3.3", "3.3-fourier"}
+NN_EXAMPLES = {"3.3", "3.3-fourier", "helmholtz", "fwi", "diffusion"}
+
+# Coefficient recovery examples (return recovered_field, true_field instead of force, solution)
+INVERSE_EXAMPLES = {"helmholtz", "fwi", "diffusion"}
 
 
 def list_options(category: str) -> None:
@@ -179,11 +194,182 @@ def run_vp(args: argparse.Namespace) -> dict:
     return metrics
 
 
+def run_inverse(args: argparse.Namespace) -> dict:
+    """Run a coefficient recovery inverse problem (Helmholtz, FWI, Diffusion)."""
+    import jax
+    import jax.numpy as jnp
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from pde_opt.examples import get_example, create_network_from_config
+    from pde_opt.examples.examples import ARCHITECTURE_CONFIGS
+    from pde_opt.utils.plotting import plot_coefficient_recovery
+
+    print(f"JAX backend: {jax.default_backend()}  |  devices: {jax.devices()}")
+
+    # ---- Build model ----
+    model = None
+    arch_name = args.arch
+    if arch_name is not None:
+        config = next((c for c in ARCHITECTURE_CONFIGS if c.name == arch_name), None)
+        if config is None:
+            print(f"Error: unknown architecture '{arch_name}'")
+            print(f"Available: {', '.join(c.name for c in ARCHITECTURE_CONFIGS)}")
+            sys.exit(1)
+        model = create_network_from_config(config)
+        print(f"\nArchitecture: {config.name}")
+        print(f"  layers: {config.hidden_layers}  activation: {config.activation}  "
+              f"type: {config.arch_type}  fourier: {config.use_fourier_features}"
+              + (f"  scale: {config.fourier_scale}" if config.use_fourier_features else ""))
+
+    # ---- Build example ----
+    example_dispatch = {
+        "helmholtz": "helmholtz-medium",
+        "fwi": "wave-inversion",
+        "diffusion": "diffusion-coefficient",
+    }
+    example_key = example_dispatch[args.example]
+    ex_kwargs = {}
+
+    if args.example == "helmholtz":
+        if args.k is not None:
+            ex_kwargs["k"] = args.k * jnp.pi
+        if args.nx is not None:
+            ex_kwargs["nx"] = args.nx
+        if args.ny is not None:
+            ex_kwargs["ny"] = args.ny
+        if args.profile is not None:
+            ex_kwargs["profile"] = args.profile
+        if args.reg is not None:
+            ex_kwargs["regularization"] = args.reg
+    elif args.example == "fwi":
+        if args.nx is not None:
+            ex_kwargs["nx"] = args.nx
+        if args.ny is not None:
+            ex_kwargs["ny"] = args.ny
+        if args.nt is not None:
+            ex_kwargs["nt"] = args.nt
+        if args.profile is not None:
+            ex_kwargs["c_profile"] = args.profile
+        if args.n_receivers is not None:
+            ex_kwargs["n_receivers"] = args.n_receivers
+        if args.T is not None:
+            ex_kwargs["T"] = args.T
+        if args.reg is not None:
+            ex_kwargs["regularization"] = args.reg
+        if args.peak_freq is not None:
+            ex_kwargs["peak_freq"] = args.peak_freq
+    elif args.example == "diffusion":
+        if args.nx is not None:
+            ex_kwargs["nx"] = args.nx
+        if args.nt is not None:
+            ex_kwargs["nt"] = args.nt
+        if args.profile is not None:
+            ex_kwargs["D_profile"] = args.profile
+        if args.obs_fraction is not None:
+            ex_kwargs["obs_fraction"] = args.obs_fraction
+        if args.T is not None:
+            ex_kwargs["T"] = args.T
+        if args.reg is not None:
+            ex_kwargs["regularization"] = args.reg
+
+    ex = get_example(example_key, **ex_kwargs)
+
+    # ---- Determine mode ----
+    mode = args.mode or 'nn'
+
+    # ---- Run ----
+    print(f"\n{'='*70}")
+    print(f"  {ex.name}  |  mode={mode}  |  arch={arch_name or 'default'}")
+    print(f"{'='*70}")
+
+    run_kwargs = {"max_iter": args.max_iter, "mode": mode}
+    if model is not None:
+        run_kwargs["model"] = model
+    if args.seed is not None:
+        run_kwargs["seed"] = args.seed
+    if args.lr_schedule is not None:
+        run_kwargs["lr_schedule_type"] = args.lr_schedule
+    if args.lr is not None:
+        run_kwargs["learning_rate"] = args.lr
+
+    t0 = time.perf_counter()
+    params, losses, field_pred, field_true = ex.run(**run_kwargs)
+    elapsed = time.perf_counter() - t0
+
+    # ---- Metrics ----
+    rel_l2 = float(jnp.linalg.norm(field_pred - field_true) / jnp.linalg.norm(field_true))
+    metrics = {
+        "example": args.example,
+        "mode": mode,
+        "arch": arch_name or "default",
+        "final_loss": float(losses[-1]),
+        "rel_l2_coefficient": rel_l2,
+        "training_time_seconds": round(elapsed, 1),
+        "max_iter": args.max_iter,
+    }
+
+    print(f"\n  Results ({elapsed:.1f}s):")
+    print(f"    Final loss:         {metrics['final_loss']:.6e}")
+    print(f"    Rel L2 (coeff):     {rel_l2:.6e}  ({100*rel_l2:.4f}%)")
+
+    # ---- Plotting ----
+    # Reconstruct grids for plotting
+    if args.example in ("helmholtz", "fwi"):
+        nx = ex.grid_params['nx']
+        ny = ex.grid_params['ny']
+        # Reconstruct grids (same linspace as solvers use)
+        x_grid = jnp.linspace(0, 1, nx)
+        y_grid = jnp.linspace(0, 1, ny)
+        field_name = "n" if args.example == "helmholtz" else "c"
+    else:
+        nx = ex.grid_params['nx']
+        x_grid = jnp.linspace(0, 1, nx)
+        y_grid = None
+        field_name = "D"
+
+    title = f"{ex.name} [{mode}] {arch_name or 'default'}"
+    figures = plot_coefficient_recovery(
+        field_true=field_true,
+        field_pred=field_pred,
+        losses=losses,
+        x_grid=x_grid,
+        y_grid=y_grid,
+        field_name=field_name,
+        title=title,
+    )
+
+    # Save figures
+    arch_label = arch_name or "default"
+    mode_label = mode
+    output_dir = args.output_dir / args.example / f"{arch_label}_{mode_label}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for fig_name, fig in figures.items():
+        filepath = output_dir / f"{fig_name}.png"
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+        size_kb = filepath.stat().st_size / 1024
+        print(f"    Saved: {filepath.relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+
+    metrics_path = output_dir / "metrics.json"
+    with open(metrics_path, "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"    Saved: {metrics_path.relative_to(PROJECT_ROOT)}")
+
+    plt.close("all")
+    return metrics
+
+
 def run(args: argparse.Namespace) -> dict:
     """Run a single example/problem/architecture combo and return metrics."""
     # VP examples use a separate code path
     if args.example == "vp":
         return run_vp(args)
+
+    # Coefficient recovery examples use a separate code path
+    if args.example in INVERSE_EXAMPLES:
+        return run_inverse(args)
 
     import jax
     import jax.numpy as jnp
@@ -405,6 +591,23 @@ def parse_args() -> argparse.Namespace:
                     help="Override temporal grid size (default: 50)")
     p.add_argument("--no-clip", action="store_true",
                     help="Disable gradient clipping (default: clip_by_global_norm(1.0))")
+
+    # Inverse problem specific (helmholtz, fwi, diffusion)
+    p.add_argument("--mode", default=None, choices=["nn", "grid"],
+                    help="Parameterization mode for inverse examples (default: nn)")
+    p.add_argument("--profile", default=None,
+                    help="Coefficient profile: gaussian_lens/circular_inclusion (helmholtz), "
+                         "layered (fwi), sinusoidal (diffusion)")
+    p.add_argument("--k", type=float, default=None,
+                    help="Wavenumber k in multiples of pi (e.g. --k 5 means k=5*pi)")
+    p.add_argument("--ny", type=int, default=None,
+                    help="Override y-direction grid size (2D problems)")
+    p.add_argument("--obs-fraction", type=float, default=None,
+                    help="Observation fraction for diffusion example (default: 0.2)")
+    p.add_argument("--n-receivers", type=int, default=None,
+                    help="Number of receivers for FWI example (default: 20)")
+    p.add_argument("--peak-freq", type=float, default=None,
+                    help="Ricker wavelet peak frequency for FWI (default: 8.0)")
 
     # Fourier-space specific (example 3.3-fourier)
     p.add_argument("--input-scheme", default=None, choices=["state_time", "state_only", "time_only"],

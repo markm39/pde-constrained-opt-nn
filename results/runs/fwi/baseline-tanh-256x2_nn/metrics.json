@@ -1,0 +1,9 @@
+{
+  "example": "fwi",
+  "mode": "nn",
+  "arch": "baseline-tanh-256x2",
+  "final_loss": 0.017351366579532623,
+  "rel_l2_coefficient": 0.13812409341335297,
+  "training_time_seconds": 3.4,
+  "max_iter": 1000
+}

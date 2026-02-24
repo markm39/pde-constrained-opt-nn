@@ -11,6 +11,9 @@ from pde_opt.solvers.solvers import (
     Poisson1DFD,
     PoissonFD,
     AdvectionDiffusionFD,
+    Helmholtz2DFD,
+    Wave2DFD,
+    VariableDiffusion1DFD,
 )
 
 __all__ = [
@@ -24,4 +27,7 @@ __all__ = [
     'Poisson1DFD',
     'PoissonFD',
     'AdvectionDiffusionFD',
+    'Helmholtz2DFD',
+    'Wave2DFD',
+    'VariableDiffusion1DFD',
 ]

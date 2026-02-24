@@ -331,6 +331,101 @@ def plot_comparison_heatmaps(data1: jnp.ndarray, data2: jnp.ndarray,
     return fig
 
 
+def plot_coefficient_recovery(
+    field_true: jnp.ndarray,
+    field_pred: jnp.ndarray,
+    losses: list,
+    x_grid: jnp.ndarray,
+    y_grid: Optional[jnp.ndarray] = None,
+    field_name: str = "n",
+    title: str = "Coefficient Recovery",
+    figsize_scale: float = 1.0,
+) -> Dict[str, Any]:
+    """Plot results for coefficient recovery inverse problems.
+
+    Handles both 2D fields (Helmholtz, FWI) and 1D fields (diffusion).
+
+    Args:
+        field_true: True coefficient (flat for 2D, or 1D array).
+        field_pred: Recovered coefficient (same shape).
+        losses: Training loss history.
+        x_grid: X grid points.
+        y_grid: Y grid points (None for 1D problems).
+        field_name: Name of the coefficient (e.g. 'n', 'c', 'D').
+        title: Overall title prefix.
+        figsize_scale: Scale factor for figure sizes.
+
+    Returns:
+        Dictionary of {name: figure}.
+    """
+    figures = {}
+
+    # Loss curve
+    figures['loss'] = plot_loss_curves(losses, title=f"{title} - Training Loss")
+
+    rel_l2 = float(jnp.linalg.norm(field_pred - field_true) / jnp.linalg.norm(field_true))
+
+    if y_grid is not None:
+        # 2D coefficient recovery
+        nx, ny = len(x_grid), len(y_grid)
+        true_2d = field_true.reshape(nx, ny)
+        pred_2d = field_pred.reshape(nx, ny)
+
+        figures['coefficient_comparison'] = plot_comparison_heatmaps(
+            true_2d, pred_2d, x_grid, y_grid,
+            title1=f"True {field_name}(x,y)",
+            title2=f"Recovered {field_name}(x,y) (Rel L2: {rel_l2:.4f})",
+            figsize=(14 * figsize_scale, 5 * figsize_scale),
+        )
+
+        # Cross-sections through the middle
+        fig_cross, axes = plt.subplots(1, 2, figsize=(12 * figsize_scale, 4 * figsize_scale))
+        mid_y = ny // 2
+        axes[0].plot(x_grid, true_2d[:, mid_y], 'b-', linewidth=2, label='True')
+        axes[0].plot(x_grid, pred_2d[:, mid_y], 'r--', linewidth=2, label='Recovered')
+        axes[0].set_xlabel('x')
+        axes[0].set_ylabel(f'{field_name}(x, y={float(y_grid[mid_y]):.2f})')
+        axes[0].set_title(f'Cross-section at y={float(y_grid[mid_y]):.2f}')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+
+        mid_x = nx // 2
+        axes[1].plot(y_grid, true_2d[mid_x, :], 'b-', linewidth=2, label='True')
+        axes[1].plot(y_grid, pred_2d[mid_x, :], 'r--', linewidth=2, label='Recovered')
+        axes[1].set_xlabel('y')
+        axes[1].set_ylabel(f'{field_name}(x={float(x_grid[mid_x]):.2f}, y)')
+        axes[1].set_title(f'Cross-section at x={float(x_grid[mid_x]):.2f}')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        figures['cross_sections'] = fig_cross
+    else:
+        # 1D coefficient recovery
+        fig, ax = plt.subplots(figsize=(8 * figsize_scale, 5 * figsize_scale))
+        ax.plot(x_grid, field_true, 'b-', linewidth=2, label=f'True {field_name}(x)')
+        ax.plot(x_grid, field_pred, 'r--', linewidth=2, label=f'Recovered {field_name}(x)')
+        ax.set_xlabel('x')
+        ax.set_ylabel(f'{field_name}(x)')
+        ax.set_title(f'{title} (Rel L2: {rel_l2:.4f})')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        figures['coefficient_comparison'] = fig
+
+        # Pointwise error
+        fig_err, ax_err = plt.subplots(figsize=(8 * figsize_scale, 4 * figsize_scale))
+        ax_err.plot(x_grid, jnp.abs(field_true - field_pred), 'k-', linewidth=2)
+        ax_err.set_xlabel('x')
+        ax_err.set_ylabel(f'|{field_name}_true - {field_name}_pred|')
+        ax_err.set_title('Pointwise Absolute Error')
+        ax_err.grid(True, alpha=0.3)
+        plt.tight_layout()
+        figures['pointwise_error'] = fig_err
+
+    return figures
+
+
 def plot_example_results(example_name: str, solver, problem, params, losses, force, solution,
                          max_snapshots: int = 5, figsize_scale: float = 1.0):
     """

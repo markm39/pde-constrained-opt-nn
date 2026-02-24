@@ -475,6 +475,152 @@ class AdvectionDiffusionFD(SpaceTimeSolver):
         return A
 
 
+class Helmholtz2DFD:
+    """Finite difference solver for 2D Helmholtz equation.
+
+    Solves: -Delta u - k^2 n(x,y)^2 u = f  on (0,1)^2
+    with homogeneous Dirichlet BCs.
+
+    K_2d approximates Delta (negative semi-definite), so
+    the system matrix A(n) = -K_2d - k^2 * diag(n^2) is indefinite.
+    We use jnp.linalg.solve (not Cholesky).
+    """
+
+    def __init__(self, nx: int, ny: int, k: float, Lx: float = 1.0, Ly: float = 1.0):
+        self.nx = nx
+        self.ny = ny
+        self.k_wavenum = k
+        self.Lx = Lx
+        self.Ly = Ly
+        self.hx = Lx / (nx + 1)
+        self.hy = Ly / (ny + 1)
+
+        self.x_grid = jnp.linspace(self.hx, Lx - self.hx, nx)
+        self.y_grid = jnp.linspace(self.hy, Ly - self.hy, ny)
+
+        # Build 2D Laplacian (K_2d approximates Delta, negative semi-definite)
+        Kx = (-2.0 * jnp.eye(nx) +
+              jnp.diag(jnp.ones(nx - 1), 1) +
+              jnp.diag(jnp.ones(nx - 1), -1)) / self.hx**2
+        Ky = (-2.0 * jnp.eye(ny) +
+              jnp.diag(jnp.ones(ny - 1), 1) +
+              jnp.diag(jnp.ones(ny - 1), -1)) / self.hy**2
+        self.K_2d = jnp.kron(Kx, jnp.eye(ny)) + jnp.kron(jnp.eye(nx), Ky)
+
+    def create_system_matrix(self, n_vec: jnp.ndarray) -> jnp.ndarray:
+        """Build A(n) = -K_2d - k^2 * diag(n^2).
+
+        Since K_2d approx Delta, this gives (-Delta - k^2 n^2), matching the PDE.
+
+        Args:
+            n_vec: Flattened refractive index field, shape (nx*ny,).
+
+        Returns:
+            System matrix of shape (nx*ny, nx*ny). Indefinite.
+        """
+        return -self.K_2d - self.k_wavenum**2 * jnp.diag(n_vec**2)
+
+    def solve(self, n_vec: jnp.ndarray, f_vec: jnp.ndarray) -> jnp.ndarray:
+        """Solve A(n) @ u = f."""
+        A = self.create_system_matrix(n_vec)
+        return jnp.linalg.solve(A, f_vec)
+
+
+class Wave2DFD:
+    """Spatial discretization for 2D wave equation with explicit leapfrog stepping.
+
+    PDE: (1/c^2) u_tt - Delta u = f(x,y,t)  on (0,Lx) x (0,Ly) x (0,T)
+    Homogeneous Dirichlet BCs.
+
+    Time-stepping (leapfrog / Stormer-Verlet):
+        u^{n+1} = 2*u^n - u^{n-1} + dt^2 * c^2 * (K_2d @ u^n + f^n)
+
+    CFL condition: dt * max(c) * sqrt(1/hx^2 + 1/hy^2) < 1
+    """
+
+    def __init__(self, nx: int, ny: int, nt: int,
+                 Lx: float = 1.0, Ly: float = 1.0, T: float = 1.0):
+        self.nx = nx
+        self.ny = ny
+        self.nt = nt
+        self.Lx = Lx
+        self.Ly = Ly
+        self.T = T
+        self.hx = Lx / (nx + 1)
+        self.hy = Ly / (ny + 1)
+        self.dt = T / nt
+
+        self.x_grid = jnp.linspace(self.hx, Lx - self.hx, nx)
+        self.y_grid = jnp.linspace(self.hy, Ly - self.hy, ny)
+        self.t_grid = jnp.linspace(self.dt, T, nt)
+
+        # 2D Laplacian (negative definite)
+        Kx = (-2.0 * jnp.eye(nx) +
+              jnp.diag(jnp.ones(nx - 1), 1) +
+              jnp.diag(jnp.ones(nx - 1), -1)) / self.hx**2
+        Ky = (-2.0 * jnp.eye(ny) +
+              jnp.diag(jnp.ones(ny - 1), 1) +
+              jnp.diag(jnp.ones(ny - 1), -1)) / self.hy**2
+        self.K_2d = jnp.kron(Kx, jnp.eye(ny)) + jnp.kron(jnp.eye(nx), Ky)
+
+    def check_cfl(self, c_max: float) -> bool:
+        """Check CFL stability condition."""
+        cfl = self.dt * c_max * jnp.sqrt(1.0 / self.hx**2 + 1.0 / self.hy**2)
+        return float(cfl) < 1.0
+
+
+class VariableDiffusion1DFD:
+    """Finite difference solver for 1D variable-coefficient diffusion.
+
+    Solves: u_t = d/dx(D(x) du/dx) + f(x,t)  on (0,L) x (0,T)
+    Homogeneous Dirichlet BCs, backward Euler time-stepping.
+
+    The spatial operator uses harmonic averaging of D at cell interfaces:
+        D_{i+1/2} = 2 * D_i * D_{i+1} / (D_i + D_{i+1})
+    """
+
+    def __init__(self, nx: int, nt: int, L: float = 1.0, T: float = 1.0):
+        self.nx = nx
+        self.nt = nt
+        self.L = L
+        self.T = T
+        self.h = L / (nx + 1)
+        self.k = T / nt
+
+        self.x_grid = jnp.linspace(self.h, L - self.h, nx)
+        self.t_grid = jnp.linspace(self.k, T, nt)
+
+    def create_spatial_matrix(self, D_vec: jnp.ndarray) -> jnp.ndarray:
+        """Build the weighted Laplacian for variable diffusion coefficient.
+
+        Args:
+            D_vec: Diffusion coefficient at interior grid points, shape (nx,).
+
+        Returns:
+            Spatial matrix K_D of shape (nx, nx), negative semi-definite.
+        """
+        # Harmonic average at cell interfaces
+        # D_{i+1/2} between interior points i and i+1
+        D_right = 2.0 * D_vec[:-1] * D_vec[1:] / (D_vec[:-1] + D_vec[1:])  # (nx-1,)
+
+        # D at boundaries: D_{-1/2} and D_{nx-1/2}
+        # Use the value at the nearest interior point (one-sided)
+        D_left_bnd = D_vec[0]    # D_{-1/2} ~ D_0
+        D_right_bnd = D_vec[-1]  # D_{nx-1/2} ~ D_{nx-1}
+
+        # Build tridiagonal matrix
+        # Main diagonal: -(D_{i-1/2} + D_{i+1/2}) / h^2
+        D_left = jnp.concatenate([jnp.array([D_left_bnd]), D_right])   # D_{i-1/2}, shape (nx,)
+        D_rght = jnp.concatenate([D_right, jnp.array([D_right_bnd])])  # D_{i+1/2}, shape (nx,)
+        main_diag = -(D_left + D_rght) / self.h**2
+
+        # Off-diagonals: D_{i+1/2} / h^2
+        off_diag = D_right / self.h**2
+
+        K = jnp.diag(main_diag) + jnp.diag(off_diag, 1) + jnp.diag(off_diag, -1)
+        return K
+
+
 # Factory function to get solver by name
 def get_solver(problem_type: str, discretization: str, **kwargs):
     """
@@ -498,6 +644,9 @@ def get_solver(problem_type: str, discretization: str, **kwargs):
         ('poisson', 'fd'): Poisson1DFD,
         ('poisson', '2d-fd'): PoissonFD,
         ('advection-diffusion', 'fd'): AdvectionDiffusionFD,
+        ('helmholtz', '2d-fd'): Helmholtz2DFD,
+        ('wave-2d', 'fd'): Wave2DFD,
+        ('variable-diffusion', 'fd'): VariableDiffusion1DFD,
     }
 
     key = (problem_type.lower(), discretization.lower())

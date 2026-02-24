@@ -692,6 +692,192 @@ class AdvectionDiffusion1D(PDEProblem):
         return jnp.sin(jnp.pi * (X - self.v * T_mesh)) * jnp.exp(-jnp.pi**2 * self.D * T_mesh)
 
 
+# --- Inverse coefficient problems ---
+
+
+class HelmholtzInverseMedium2D(PDEProblem):
+    """2D Helmholtz inverse medium problem: recover refractive index n(x,y).
+
+    PDE: -Delta u - k^2 n(x,y)^2 u = f(x,y)  on (0,1)^2
+    u = 0 on boundary
+
+    Given known source f and observed field u_obs, recover n(x,y).
+    """
+
+    def __init__(self, k: float = 10 * jnp.pi, profile: str = 'gaussian_lens'):
+        super().__init__(
+            name="2D Helmholtz Inverse Medium",
+            description="Recover refractive index from Helmholtz observations",
+            domain=(0.0, 1.0, 0.0, 1.0),
+            boundary_conditions="Homogeneous Dirichlet",
+            parameters={"k": k, "profile": profile},
+        )
+        self.k_wavenum = k
+        self.profile = profile
+
+    def true_refractive_index(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """True n(x,y) on a meshgrid. Returns shape (nx, ny)."""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+        if self.profile == 'gaussian_lens':
+            # Smooth Gaussian anomaly centered at (0.5, 0.5)
+            return 1.0 + 0.3 * jnp.exp(-((X - 0.5)**2 + (Y - 0.5)**2) / 0.02)
+        elif self.profile == 'circular_inclusion':
+            # Sharp circular inclusion
+            r = jnp.sqrt((X - 0.5)**2 + (Y - 0.5)**2)
+            return jnp.where(r < 0.2, 2.0, 1.0)
+        elif self.profile == 'layered':
+            # Horizontal layers
+            return 1.0 + 0.3 * jnp.where(Y > 0.5, 1.0, 0.0)
+        else:
+            return jnp.ones_like(X)
+
+    def source_field(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """Known source f(x,y). Returns flattened shape (nx*ny,)."""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+        # Localized Gaussian source at (0.2, 0.2)
+        f = 100.0 * jnp.exp(-((X - 0.2)**2 + (Y - 0.2)**2) / 0.005)
+        return f.ravel()
+
+    def generate_observations(self, solver) -> jnp.ndarray:
+        """Forward-solve with true n to produce observation data."""
+        n_true = self.true_refractive_index(solver.x_grid, solver.y_grid).ravel()
+        f_vec = self.source_field(solver.x_grid, solver.y_grid)
+        return solver.solve(n_true, f_vec)
+
+
+class WaveInversion2D(PDEProblem):
+    """2D full waveform inversion: recover wave speed c(x,y) from seismograms.
+
+    PDE: (1/c^2) u_tt - Delta u = f(x,y,t)  on (0,1)^2 x (0,T)
+    u = 0 on boundary, zero ICs.
+
+    Source is a Ricker wavelet at a point. Receivers record u at fixed locations.
+    """
+
+    def __init__(self, c_profile: str = 'layered', n_receivers: int = 20,
+                 source_loc: Tuple[float, float] = (0.5, 0.1),
+                 peak_freq: float = 8.0, T: float = 1.0):
+        super().__init__(
+            name="2D Full Waveform Inversion",
+            description="Recover wave speed from seismic receiver data",
+            domain=(0.0, 1.0, 0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet",
+            parameters={"c_profile": c_profile, "n_receivers": n_receivers,
+                        "peak_freq": peak_freq, "T": T},
+        )
+        self.c_profile = c_profile
+        self.n_receivers = n_receivers
+        self.source_loc = source_loc
+        self.peak_freq = peak_freq
+        self.T = T
+
+    def true_wave_speed(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """True c(x,y) on a meshgrid. Returns shape (nx, ny)."""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+        if self.c_profile == 'layered':
+            # Background + two velocity jumps
+            c = 2.0 + 0.5 * jnp.tanh(20.0 * (Y - 0.3)) + 0.3 * jnp.tanh(20.0 * (Y - 0.7))
+            return c
+        elif self.c_profile == 'anomaly':
+            # Background with circular high-velocity anomaly
+            r = jnp.sqrt((X - 0.5)**2 + (Y - 0.5)**2)
+            return 2.0 + 1.0 * jnp.exp(-r**2 / 0.01)
+        else:
+            return 2.0 * jnp.ones_like(X)
+
+    def ricker_wavelet(self, t: jnp.ndarray) -> jnp.ndarray:
+        """Ricker wavelet (Mexican hat) centered at t_0 = 1.5/f_peak."""
+        f = self.peak_freq
+        t0 = 1.5 / f
+        arg = (jnp.pi * f * (t - t0))**2
+        return (1.0 - 2.0 * arg) * jnp.exp(-arg)
+
+    def source_time_function(self, t: jnp.ndarray,
+                             x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """Spatial source * temporal wavelet. Returns (nt, nx*ny)."""
+        X, Y = jnp.meshgrid(x, y, indexing='ij')
+        # Spatial: narrow Gaussian at source location
+        xs, ys = self.source_loc
+        spatial = jnp.exp(-((X - xs)**2 + (Y - ys)**2) / 0.001).ravel()  # (nx*ny,)
+        temporal = self.ricker_wavelet(t)  # (nt,)
+        return temporal[:, None] * spatial[None, :]  # (nt, nx*ny)
+
+    def receiver_indices(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """Indices into flattened (nx*ny,) array for receiver locations.
+
+        Receivers placed along y = 0.9 at uniformly spaced x positions.
+        """
+        ny = len(y)
+        # Find y-index closest to 0.9
+        y_idx = jnp.argmin(jnp.abs(y - 0.9))
+        # Uniformly spaced x indices
+        nx = len(x)
+        x_indices = jnp.linspace(0, nx - 1, self.n_receivers).astype(int)
+        # Flattened index: i * ny + j (row-major, x varies first)
+        return x_indices * ny + y_idx
+
+
+class DiffusionCoefficientInverse1D(PDEProblem):
+    """1D variable-coefficient diffusion inverse problem.
+
+    PDE: u_t = d/dx(D(x) du/dx) + f(x,t)
+    Recover D(x) from sparse observations of u.
+    """
+
+    def __init__(self, D_profile: str = 'sinusoidal', obs_fraction: float = 0.2,
+                 n_time_obs: int = 5, T: float = 1.0, seed: int = 42):
+        super().__init__(
+            name="1D Diffusion Coefficient Inverse",
+            description="Recover D(x) from sparse observations",
+            domain=(0.0, 1.0, T),
+            boundary_conditions="Homogeneous Dirichlet",
+            parameters={"D_profile": D_profile, "obs_fraction": obs_fraction,
+                        "n_time_obs": n_time_obs, "T": T},
+        )
+        self.D_profile = D_profile
+        self.obs_fraction = obs_fraction
+        self.n_time_obs = n_time_obs
+        self.T = T
+        self.seed = seed
+
+    def true_diffusion(self, x: jnp.ndarray) -> jnp.ndarray:
+        """True D(x). Returns shape (nx,)."""
+        if self.D_profile == 'sinusoidal':
+            return 1.0 + 0.5 * jnp.sin(2.0 * jnp.pi * x)
+        elif self.D_profile == 'layered':
+            return jnp.where(x < 0.5, 1.0, 3.0)
+        elif self.D_profile == 'smooth_bump':
+            return 1.0 + 2.0 * jnp.exp(-((x - 0.5)**2) / 0.01)
+        else:
+            return jnp.ones_like(x)
+
+    def source_term(self, x: jnp.ndarray, t: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+        """Known source f(x,t)."""
+        if t is None:
+            return jnp.sin(jnp.pi * x)
+        X, T_mesh = jnp.meshgrid(x, t, indexing='ij')
+        return jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * T_mesh)
+
+    def initial_condition(self, x: jnp.ndarray) -> jnp.ndarray:
+        return jnp.zeros_like(x)
+
+    def observation_mask(self, nx: int, nt: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Generate random spatial indices and uniform time indices for observations.
+
+        Returns:
+            (spatial_indices, time_indices) -- integer arrays for subsampling.
+        """
+        import jax
+        key = jax.random.PRNGKey(self.seed)
+        n_spatial = max(1, int(self.obs_fraction * nx))
+        spatial_idx = jax.random.choice(key, nx, shape=(n_spatial,), replace=False)
+        spatial_idx = jnp.sort(spatial_idx)
+
+        # Uniformly spaced time observations
+        time_idx = jnp.linspace(0, nt - 1, self.n_time_obs).astype(int)
+        return spatial_idx, time_idx
+
+
 # Factory function to get problem by name
 def get_problem(problem_name: str, **kwargs) -> PDEProblem:
     """
@@ -720,6 +906,9 @@ def get_problem(problem_name: str, **kwargs) -> PDEProblem:
         'nonlinear-heat-2d': NonlinearHeat2D,
         'wave-1d': WaveEquation1D,
         'advection-diffusion-1d': AdvectionDiffusion1D,
+        'helmholtz-inverse-2d': HelmholtzInverseMedium2D,
+        'wave-inversion-2d': WaveInversion2D,
+        'diffusion-coefficient-1d': DiffusionCoefficientInverse1D,
     }
 
     # VP problems use a different config type (VPProblemConfig, not PDEProblem)
