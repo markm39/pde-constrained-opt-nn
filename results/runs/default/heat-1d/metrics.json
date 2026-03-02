@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d",
+  "arch": "default",
+  "final_loss": 0.1671033799648285,
+  "training_time_seconds": 3.7,
+  "max_iter": 10,
+  "rel_l2_solution": 0.7891260385513306,
+  "rel_l2_force": 0.8132838606834412
+}

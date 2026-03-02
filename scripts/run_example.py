@@ -183,12 +183,12 @@ def run_vp(args: argparse.Namespace) -> dict:
         filepath = output_dir / f"{fig_name}.png"
         fig.savefig(filepath, dpi=300, bbox_inches="tight")
         size_kb = filepath.stat().st_size / 1024
-        print(f"    Saved: {filepath.relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+        print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
 
     metrics_path = output_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    print(f"    Saved: {metrics_path.relative_to(PROJECT_ROOT)}")
+    print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
 
     plt.close("all")
     return metrics
@@ -293,6 +293,8 @@ def run_inverse(args: argparse.Namespace) -> dict:
         run_kwargs["lr_schedule_type"] = args.lr_schedule
     if args.lr is not None:
         run_kwargs["learning_rate"] = args.lr
+    if hasattr(args, 'k_continuation') and args.k_continuation:
+        run_kwargs["k_continuation"] = True
 
     t0 = time.perf_counter()
     params, losses, field_pred, field_true = ex.run(**run_kwargs)
@@ -350,12 +352,12 @@ def run_inverse(args: argparse.Namespace) -> dict:
         filepath = output_dir / f"{fig_name}.png"
         fig.savefig(filepath, dpi=300, bbox_inches="tight")
         size_kb = filepath.stat().st_size / 1024
-        print(f"    Saved: {filepath.relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+        print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
 
     metrics_path = output_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    print(f"    Saved: {metrics_path.relative_to(PROJECT_ROOT)}")
+    print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
 
     plt.close("all")
     return metrics
@@ -441,6 +443,9 @@ def run(args: argparse.Namespace) -> dict:
         run_kwargs["grad_clip"] = None
     if args.lr_schedule is not None:
         run_kwargs["lr_schedule_type"] = args.lr_schedule
+    if args.example in ("3.3", "3.3-fourier"):
+        if args.mode is not None:
+            run_kwargs["mode"] = args.mode
     if args.example == "3.3-fourier":
         if args.input_scheme is not None:
             run_kwargs["input_scheme"] = args.input_scheme
@@ -530,13 +535,13 @@ def run(args: argparse.Namespace) -> dict:
             filepath = output_dir / f"{fig_name}.png"
             fig.savefig(filepath, dpi=300, bbox_inches="tight")
             size_kb = filepath.stat().st_size / 1024
-            print(f"    Saved: {filepath.relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+            print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
 
         # Save metrics json alongside the figures
         metrics_path = output_dir / "metrics.json"
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
-        print(f"    Saved: {metrics_path.relative_to(PROJECT_ROOT)}")
+        print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
 
         plt.close("all")
     else:
@@ -608,6 +613,8 @@ def parse_args() -> argparse.Namespace:
                     help="Number of receivers for FWI example (default: 20)")
     p.add_argument("--peak-freq", type=float, default=None,
                     help="Ricker wavelet peak frequency for FWI (default: 8.0)")
+    p.add_argument("--k-continuation", action="store_true",
+                    help="Use frequency continuation for Helmholtz (train from k=pi up to target k)")
 
     # Fourier-space specific (example 3.3-fourier)
     p.add_argument("--input-scheme", default=None, choices=["state_time", "state_only", "time_only"],

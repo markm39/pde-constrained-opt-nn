@@ -1,0 +1,14 @@
+{
+  "example": "vp",
+  "problem": "vp-two-stream",
+  "cost_function": "eet",
+  "n_fourier_modes": 2,
+  "regularization": 10000.0,
+  "final_cost": 0.016371958547937,
+  "electric_energy_final": 1.196316847287143e-05,
+  "electric_energy_baseline": 0.9720024282679317,
+  "suppression_ratio": 1.2307755747266294e-05,
+  "H_max": 0.0012313606454967814,
+  "training_time_seconds": 158.6,
+  "max_iter": 50
+}

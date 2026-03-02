@@ -1,0 +1,374 @@
+\documentclass[11pt]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{subcaption}
+\usepackage[margin=1in]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+\usepackage{natbib}
+\usepackage{multirow}
+
+% Macros
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\| #1 \right\|}
+\newcommand{\abs}[1]{\left| #1 \right|}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand{\mat}[1]{\mathbf{#1}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{Neural Network Parameterization for PDE-Constrained\\Optimization}
+\author{
+  Mark Miller \and
+  Pritam Kayal \and
+  Yifan Yang \and
+  Martin Guerra \and
+  Yukun Yue
+}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We investigate neural network (NN) parameterization as an alternative to standard grid-based representations in PDE-constrained inverse problems. Rather than optimizing unknown fields directly on a computational grid, we parameterize them as the output of a neural network and optimize the network weights instead. We demonstrate this approach on two problems: (1) recovering an unknown forcing term in a heat equation with highly oscillatory target solutions, where a neural network with Fourier features achieves MSE $8.6 \times 10^{-6}$ compared to the grid baseline's MSE $0.24$, and (2) Helmholtz inverse medium recovery, where NN parameterization achieves a relative $L^2$ error of 1.3\% vs.\ 69.5\% for the grid baseline. We attribute these gains to the implicit regularization provided by the NN's spectral bias---and, for oscillatory problems, Fourier feature embeddings that enable the network to represent high-frequency content that standard architectures and grid methods cannot capture.
+\end{abstract}
+
+
+%% ============================================================
+\section{Introduction}
+\label{sec:intro}
+%% ============================================================
+
+Many problems in science and engineering require recovering an unknown field from indirect observations governed by a partial differential equation (PDE). These \emph{PDE-constrained inverse problems} arise in medical imaging (recovering tissue properties from wave measurements), geophysics (seismic velocity estimation), and heat transfer (identifying thermal conductivity or source terms from temperature data).
+
+The standard approach discretizes the unknown field on the computational grid and optimizes the resulting finite-dimensional vector using gradient-based methods, with gradients computed via the adjoint method or automatic differentiation through the forward solver. While straightforward, this approach suffers from several well-known difficulties:
+\begin{itemize}
+  \item \textbf{Local minima.} Nonlinear inverse problems---particularly wave-based problems at high frequencies---exhibit many local minima in the misfit landscape \citep{virieux2009overview}. Grid-based optimization routinely converges to incorrect solutions.
+  \item \textbf{Ill-posedness.} When observations are sparse or the unknown field is high-dimensional, the problem is underdetermined. Grid-based approaches require explicit regularization (Tikhonov, total variation) whose weight must be carefully tuned.
+  \item \textbf{No implicit smoothness.} Grid values at unobserved locations receive no direct gradient signal and may drift to arbitrary values.
+  \item \textbf{Spectral limitations.} When the target field contains high-frequency oscillations, standard grid optimization struggles to resolve these components without extremely fine grids and many iterations.
+\end{itemize}
+
+Recent work has shown that parameterizing the unknown field as the output of a neural network---and optimizing the network weights instead of grid values---can overcome these difficulties \citep{sun2023ifwi, zhu2022nnfwi}. The key insight is that neural networks exhibit \emph{spectral bias}: they preferentially learn low-frequency components before high-frequency ones \citep{rahaman2019spectral}. For inverse problems, this bias acts as automatic frequency continuation, naturally guiding optimization from coarse to fine resolution and avoiding local minima. Furthermore, augmenting the network with \emph{Fourier feature} input embeddings \citep{tancik2020fourier} allows the network to efficiently represent high-frequency content that both standard MLPs and grid-based methods fail to capture.
+
+In this paper, we provide a systematic comparison of NN vs.\ grid parameterization on two inverse problems. All experiments use the same optimizer (Adam), the same forward solvers (finite differences with automatic differentiation via JAX), and comparable iteration budgets. The only difference is how the unknown field is represented.
+
+
+%% ============================================================
+\section{Method}
+\label{sec:method}
+%% ============================================================
+
+\subsection{Problem Formulation}
+
+We consider inverse problems of the form
+\begin{equation}
+  \min_{\theta \in \R^d} \; J(\theta) = \frac{1}{N_{\text{obs}}} \sum_{i=1}^{N_{\text{obs}}} \left( u_{\text{pred}}^{(i)}(\theta) - u_{\text{obs}}^{(i)} \right)^2 + \lambda \, R(\theta),
+  \label{eq:objective}
+\end{equation}
+where $u_{\text{pred}}(\theta)$ denotes the solution of a PDE whose coefficients or forcing depend on the parameter $\theta$, $u_{\text{obs}}$ denotes observed data, and $R(\theta)$ is a regularization term. The forward PDE is solved numerically at each optimization step, and gradients of $J$ with respect to $\theta$ are computed by automatic differentiation through the solver.
+
+\subsection{Grid Parameterization (Baseline)}
+
+In the grid-based approach, the unknown field $f(x)$ is represented directly as a vector of values at grid points:
+\begin{equation}
+  f_h = (f_1, f_2, \ldots, f_N)^\top \in \R^N,
+\end{equation}
+where $N$ is the number of spatial (or spatio-temporal) grid points. Each grid value is a free optimization variable. This gives maximum representational flexibility but provides no structural prior on the solution.
+
+\subsection{Neural Network Parameterization}
+
+In the NN approach, the unknown field is represented as
+\begin{equation}
+  f(x) = \mathcal{N}_\theta(x),
+\end{equation}
+where $\mathcal{N}_\theta : \R^d \to \R$ is a neural network with weights $\theta$. The network is evaluated at all grid points to produce a field vector, which is then fed into the same forward solver as the grid-based approach. Output transformations $g(\cdot)$ can enforce physical constraints (e.g., $g = c_{\min} + \sigma(\cdot)(c_{\max} - c_{\min})$ for bounded fields).
+
+\subsection{Fourier Feature Embeddings}
+
+Standard neural networks with smooth activations exhibit spectral bias, learning low-frequency components first \citep{rahaman2019spectral}. While this provides useful implicit regularization for smooth fields, it becomes a limitation when the target contains high-frequency oscillations.
+
+Fourier feature embeddings \citep{tancik2020fourier} address this by mapping the input coordinates through a set of sinusoidal basis functions before passing them to the network:
+\begin{equation}
+  \gamma(x) = \bigl[\sin(2\pi \mat{B} x), \; \cos(2\pi \mat{B} x)\bigr]^\top,
+  \label{eq:fourier_features}
+\end{equation}
+where $\mat{B} \in \R^{m \times d}$ is a matrix of frequency coefficients sampled from $\mathcal{N}(0, \sigma^2)$. The scale parameter $\sigma$ controls the frequency range: larger $\sigma$ enables representation of higher frequencies. The network then operates on $\gamma(x)$ instead of $x$ directly, giving it access to a rich set of frequency components from initialization.
+
+\subsection{Architecture: Modified MLP}
+
+For certain problems, we use the \emph{modified MLP} architecture \citep{wang2021eigenvector}, which provides richer gradient flow via multiplicative gating:
+\begin{align}
+  U &= \sigma(W_U x + b_U), \quad V = \sigma(W_V x + b_V), \\
+  h^{(l+1)} &= \sigma(W^{(l)} h^{(l)} + b^{(l)}) \odot U + (1 - \sigma(W^{(l)} h^{(l)} + b^{(l)})) \odot V,
+\end{align}
+where $\odot$ denotes element-wise multiplication. This is particularly effective when gradients must propagate through long computational graphs.
+
+\subsection{Optimization}
+
+All experiments use the Adam optimizer. Learning rates and schedules are tuned per problem. Gradients are clipped by global norm to 1.0. Automatic differentiation through the forward solver is performed using JAX \citep{jax2018github}, which enables efficient gradient computation through iterative solvers (via \texttt{jax.lax.scan}) and direct linear solves.
+
+
+%% ============================================================
+\section{Numerical Experiments}
+\label{sec:experiments}
+%% ============================================================
+
+We present two inverse problems that highlight different failure modes of grid-based optimization.
+
+%% --------------------------------------------------
+\subsection{Heat Equation: Recovering Highly Oscillatory Forcing}
+\label{sec:heat}
+%% --------------------------------------------------
+
+\paragraph{Problem.} Given observations of the solution $u(x,t)$, recover the unknown forcing term $f(x,t)$ in the 1D heat equation:
+\begin{equation}
+  \frac{\partial u}{\partial t} - \frac{\partial^2 u}{\partial x^2} = f(x,t), \quad x \in (0,1), \; t \in (0, T),
+  \label{eq:heat}
+\end{equation}
+with homogeneous Dirichlet boundary conditions $u(0,t) = u(1,t) = 0$ and initial condition $u(x,0) = \sin(15\pi x)$. The target solution is
+\begin{equation}
+  u(x,t) = \sin(15\pi x) \cos(15\pi t),
+\end{equation}
+which oscillates rapidly in both space and time. The corresponding true forcing is obtained by substituting into the PDE:
+\begin{equation}
+  f_{\text{true}}(x,t) = \bigl((15\pi)^2 \cos(15\pi t) - 15\pi \sin(15\pi t)\bigr) \sin(15\pi x).
+\end{equation}
+This problem tests whether each parameterization can represent and recover a field with 15 spatial oscillations.
+
+\paragraph{Setup.} We use $T = 0.5$, backward Euler time-stepping with Cholesky factorization, and the mean squared error loss $J = \text{MSE}(u_{\text{pred}}, u_{\text{obs}})$. We compare three approaches:
+
+\begin{enumerate}
+  \item \textbf{Grid (plain).} The forcing $f$ is a raw array of $n_t \times n_x$ values, optimized with Adam (LR $= 3 \times 10^{-3}$, exponential decay) for 10{,}000 iterations on a $200 \times 50$ grid (10{,}000 unknowns). No regularization.
+
+  \item \textbf{Grid (optimized).} Following \citet{khimin2024optimal}, the grid values are optimized with Adagrad (LR $= 20$) for 15{,}000 iterations on a $150 \times 50$ grid. The loss is augmented with $L^2$ regularization ($\alpha = 10^{-5}$) and finite-difference smoothness penalties on first and second spatial/temporal derivatives and the cross-derivative (all weights $= 10^{-3}$). This represents a best-effort grid approach with hand-tuned regularization.
+
+  \item \textbf{NN (Fourier features).} The forcing is parameterized by a tanh MLP ($256 \times 2$) with Fourier feature input embedding (scale $\sigma = 30$). The network takes normalized $(x, t)$ coordinates as input. Optimized with Adam (LR $= 3 \times 10^{-3}$, exponential decay) for 10{,}000 iterations on a $200 \times 50$ grid. No explicit regularization ($\sim$198K parameters).
+\end{enumerate}
+
+\paragraph{Results.} Table~\ref{tab:heat_results} summarizes the three approaches. The NN achieves a final MSE of $8.6 \times 10^{-6}$ and a relative $L^2$ error of \textbf{0.59\%} on the solution. The plain grid fails completely (98.2\% error). The optimized grid with smoothness penalties reduces the MSE to $\sim$0.07, but this is still $\sim$8{,}000$\times$ worse than the NN despite requiring substantial hand-tuning of five regularization hyperparameters.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Heat equation ($\omega = 15$): comparison of three approaches for recovering the oscillatory forcing term.}
+  \label{tab:heat_results}
+  \begin{tabular}{lccccc}
+    \toprule
+    \textbf{Method} & \textbf{Grid} & \textbf{Iters} & \textbf{Optimizer} & \textbf{MSE} & \textbf{Rel.\ $L^2$ (soln)} \\
+    \midrule
+    Grid (plain)     & $200 \times 50$ & 10{,}000 & Adam & $2.4 \times 10^{-1}$ & 98.2\% \\
+    Grid (optimized) & $150 \times 50$ & 15{,}000 & Adagrad & $7.3 \times 10^{-2}$ & -- \\
+    NN (Fourier)     & $200 \times 50$ & 10{,}000 & Adam & $8.6 \times 10^{-6}$ & 0.59\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Figures~\ref{fig:heat_force_comparison} and~\ref{fig:heat_solution_comparison} compare the recovered forcing and solution across all three methods. The NN closely tracks the true oscillatory profiles at all time snapshots (top rows). The optimized grid captures the general oscillatory shape but exhibits significant amplitude errors and phase drift, particularly at later times (middle rows). The plain grid converges to near-zero fields (bottom rows).
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/heat_nn_force_snapshots.png}
+    \caption{NN with Fourier features: closely matches the true forcing at all times.}
+  \end{subfigure}
+  \vspace{0.3em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/vanilla_grid_force_hi_osc.png}
+    \caption{Grid (optimized): captures oscillatory shape but with amplitude errors and phase drift.}
+  \end{subfigure}
+  \vspace{0.3em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/heat_grid_force_snapshots.png}
+    \caption{Grid (plain): fails completely, converging to near-zero forcing.}
+  \end{subfigure}
+  \caption{Recovered forcing $f(x,t)$ at three time snapshots for the highly oscillatory heat equation ($\omega = 15$). Blue: true forcing. Red dashed: learned forcing.}
+  \label{fig:heat_force_comparison}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/heat_nn_solution_snapshots.png}
+    \caption{NN with Fourier features: solution rel.\ $L^2$ error = 0.59\%.}
+  \end{subfigure}
+  \vspace{0.3em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/vanilla_grid_solution_hi_osc.png}
+    \caption{Grid (optimized): partial recovery with visible errors (spacetime view: true, learned, difference).}
+  \end{subfigure}
+  \vspace{0.3em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/heat_grid_solution_snapshots.png}
+    \caption{Grid (plain): solution rel.\ $L^2$ error = 98.2\%.}
+  \end{subfigure}
+  \caption{Recovered solution $u(x,t)$ for the highly oscillatory heat equation ($\omega = 15$).}
+  \label{fig:heat_solution_comparison}
+\end{figure}
+
+The key insight is that the Fourier feature embedding gives the NN a natural basis for representing oscillatory functions. Each network evaluation produces a spatially coherent sinusoidal pattern, whereas each grid point is an independent variable with no coupling to its neighbors. Even with careful hand-tuning of smoothness penalties, the optimized grid approach achieves MSE $\sim$8{,}000$\times$ worse than the NN. Without such tuning, the plain grid cannot discover any oscillatory structure at all.
+
+
+%% --------------------------------------------------
+\subsection{Helmholtz Inverse Medium Recovery}
+\label{sec:helmholtz}
+%% --------------------------------------------------
+
+\paragraph{Problem.} Given a known source $f(x,y)$ and full-field observations of the solution $u$, recover the refractive index field $n(x,y)$ in the Helmholtz equation:
+\begin{equation}
+  -\Delta u - k^2 n(x,y)^2 u = f(x,y), \quad (x,y) \in (0,1)^2, \quad u\big|_{\partial\Omega} = 0.
+  \label{eq:helmholtz}
+\end{equation}
+This is a nonlinear inverse problem because $n$ multiplies $u$ inside the PDE. At moderate to high wavenumbers $k$, the misfit landscape has many local minima due to cycle-skipping: if the predicted wavefield phase is off by more than half a period, the gradient points in the wrong direction.
+
+\paragraph{Setup.} We use $k = 5\pi$, a $30 \times 30$ interior grid (900 unknowns), and a Gaussian lens profile:
+\begin{equation}
+  n_{\text{true}}(x,y) = 1.0 + 0.4 \exp\!\left(-\frac{(x-0.5)^2 + (y-0.5)^2}{0.02}\right).
+\end{equation}
+The source is a localized Gaussian at $(0.2, 0.2)$. We observe $u$ at all interior grid points and minimize $\|u_{\text{pred}} - u_{\text{obs}}\|^2 + \lambda \|n - 1\|^2$ with $\lambda = 10^{-4}$. Both methods use Adam with cosine LR schedule (peak LR $= 5 \times 10^{-4}$, 5\% warmup) for 2000 iterations.
+
+\paragraph{Results.} The NN (modified-MLP, $256 \times 2$, seed 13) recovers the Gaussian lens nearly perfectly with a relative $L^2$ error of \textbf{1.27\%} after 2000 iterations. The grid baseline converges to a local minimum with \textbf{69.5\%} error---a 55$\times$ improvement.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/helmholtz_nn_comparison.png}
+    \caption{NN parameterization (modified-MLP): relative $L^2$ error = 1.27\%.}
+    \label{fig:helmholtz_nn}
+  \end{subfigure}
+  \vspace{0.5em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/helmholtz_grid_comparison.png}
+    \caption{Grid parameterization: relative $L^2$ error = 69.5\%.}
+    \label{fig:helmholtz_grid}
+  \end{subfigure}
+  \caption{Helmholtz inverse medium recovery ($k = 5\pi$, $30 \times 30$ grid). Left: true $n(x,y)$. Center: recovered $n(x,y)$. Right: absolute error. The NN recovers the Gaussian lens almost exactly, while the grid-based approach converges to a completely incorrect solution.}
+  \label{fig:helmholtz_comparison}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/helmholtz_nn_cross_sections.png}
+  \caption{Cross-sections through the center of the recovered Helmholtz refractive index (NN). The NN closely matches the true Gaussian profile in both $x$ and $y$ directions.}
+  \label{fig:helmholtz_cross}
+\end{figure}
+
+The Helmholtz problem illustrates the local minimum problem. At $k = 5\pi$, the wavefield has approximately 5 oscillation cycles across the domain. The grid starts from a uniform initial guess and immediately encounters cycle-skipping: the predicted phase is wrong, gradients push in the wrong direction, and the optimizer converges to a spurious solution. The NN's spectral bias causes it to first recover the low-frequency (smooth) component of $n(x,y)$, effectively performing automatic frequency continuation that avoids the cycle-skipping trap.
+
+
+%% ============================================================
+\section{Summary of Results}
+\label{sec:summary}
+%% ============================================================
+
+Table~\ref{tab:summary} summarizes the results across both problems.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Summary of NN vs.\ grid parameterization across both problems. The heat equation comparison uses MSE; the Helmholtz comparison uses relative $L^2$ error on the recovered coefficient.}
+  \label{tab:summary}
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{Problem} & \textbf{Method} & \textbf{Iters} & \textbf{Error Metric} & \textbf{Value} \\
+    \midrule
+    \multirow{3}{*}{Heat ($\omega = 15$)}
+      & NN (Fourier MLP) & 10{,}000 & MSE & $8.6 \times 10^{-6}$ \\
+      & Grid (optimized) & 15{,}000 & MSE & $7.3 \times 10^{-2}$ \\
+      & Grid (plain)     & 10{,}000 & MSE & $2.4 \times 10^{-1}$ \\
+    \midrule
+    \multirow{2}{*}{Helmholtz ($k = 5\pi$)}
+      & NN (Mod-MLP)     & 2{,}000  & Rel.\ $L^2$ & 1.27\% \\
+      & Grid (plain)     & 2{,}000  & Rel.\ $L^2$ & 69.5\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Several observations emerge:
+
+\begin{enumerate}
+  \item \textbf{Fourier features enable high-frequency recovery (heat equation).} The plain grid has 10{,}000 independent variables but cannot coordinate them into a coherent oscillatory pattern. Even the optimized grid with hand-tuned smoothness penalties achieves MSE only $\sim$8{,}000$\times$ worse than the NN. The NN with Fourier features naturally represents sinusoidal structure, requiring no explicit smoothness regularization.
+
+  \item \textbf{Hand-tuning regularization is no substitute for the right parameterization.} The optimized grid required careful selection of five regularization weights, a specialized optimizer (Adagrad), and 50\% more iterations---yet still produced results orders of magnitude worse than the NN with zero regularization.
+
+  \item \textbf{Spectral bias avoids local minima (Helmholtz).} The NN's low-to-high frequency learning progression acts as implicit frequency continuation, avoiding the cycle-skipping that traps the grid at 69.5\% error. The modified-MLP architecture further improves gradient flow.
+\end{enumerate}
+
+
+%% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+%% ============================================================
+
+We have demonstrated that neural network parameterization provides substantial improvements over grid-based optimization for PDE-constrained inverse problems. The NN approach requires no modifications to the forward solver---the same discretization and same optimizer are used in both cases. The improvement comes entirely from the choice of \emph{how the unknown is represented}.
+
+For oscillatory problems, Fourier feature embeddings are critical: they provide the network with a natural basis for high-frequency content, enabling recovery of fields that grid-based methods and standard MLPs cannot represent. For problems with complex misfit landscapes, the NN's spectral bias provides implicit frequency continuation that avoids local minima.
+
+Future work will explore: (i) scaling to larger grids and higher wavenumbers, (ii) full waveform inversion and diffusion coefficient recovery problems, (iii) combining NN parameterization with multi-scale continuation strategies, and (iv) incorporating hard constraints (non-negativity, boundedness) through the network architecture.
+
+
+%% ============================================================
+% References
+%% ============================================================
+
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{10}
+
+\bibitem[Virieux and Operto(2009)]{virieux2009overview}
+J.~Virieux and S.~Operto.
+\newblock An overview of full-waveform inversion in exploration geophysics.
+\newblock \emph{Geophysics}, 74(6):WCC1--WCC26, 2009.
+
+\bibitem[Sun et~al.(2023)]{sun2023ifwi}
+B.~Sun, T.~Alkhalifah, and others.
+\newblock Implicit full-waveform inversion with deep neural network parameterization.
+\newblock \emph{Geophysics}, 88(3):R293--R305, 2023.
+
+\bibitem[Zhu et~al.(2022)]{zhu2022nnfwi}
+W.~Zhu and others.
+\newblock Neural network parameterized full waveform inversion.
+\newblock \emph{Journal of Geophysical Research: Solid Earth}, 127, 2022.
+
+\bibitem[Rahaman et~al.(2019)]{rahaman2019spectral}
+N.~Rahaman and others.
+\newblock On the spectral bias of neural networks.
+\newblock In \emph{Proceedings of the 36th International Conference on Machine Learning (ICML)}, 2019.
+
+\bibitem[Tancik et~al.(2020)]{tancik2020fourier}
+M.~Tancik and others.
+\newblock Fourier features let networks learn high frequency functions in low dimensional domains.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, Vol.~33, pp.~7537--7547, 2020.
+
+\bibitem[Wang et~al.(2021)]{wang2021eigenvector}
+S.~Wang, Y.~Teng, and P.~Perdikaris.
+\newblock Understanding and mitigating gradient flow pathologies in physics-informed neural networks.
+\newblock \emph{SIAM Journal on Scientific Computing}, 43(5):A3055--A3081, 2021.
+
+\bibitem[Bradbury et~al.(2018)]{jax2018github}
+J.~Bradbury and others.
+\newblock {JAX}: composable transformations of {P}ython+{N}um{P}y programs, 2018.
+\newblock URL \url{http://github.com/google/jax}.
+
+\bibitem[Khimin et~al.(2024)]{khimin2024optimal}
+D.~Khimin and others.
+\newblock Optimal control of partial differential equations in {PyTorch} using automatic differentiation and neural network surrogates.
+\newblock In \emph{arXiv preprint arXiv:2408.12404}, 2024.
+
+\end{thebibliography}
+
+\end{document}

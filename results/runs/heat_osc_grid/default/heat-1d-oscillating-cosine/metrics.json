@@ -1,0 +1,10 @@
+{
+  "example": "3.3",
+  "problem": "heat-1d-oscillating-cosine",
+  "arch": "default",
+  "final_loss": 0.2372029423713684,
+  "training_time_seconds": 8.0,
+  "max_iter": 10000,
+  "rel_l2_solution": 0.981506884098053,
+  "rel_l2_force": 0.9830711483955383
+}
