@@ -52,6 +52,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def parse_k_stage_multipliers(value: str | None) -> list[float] | None:
+    """Parse a comma-separated list of Helmholtz continuation stage multipliers."""
+    if value is None:
+        return None
+
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("--k-stages must contain at least one comma-separated number")
+
+    stages = []
+    for token in stripped.split(","):
+        token = token.strip()
+        if not token:
+            raise ValueError("--k-stages must not contain empty entries")
+        stages.append(float(token))
+
+    return stages
+
+
+def format_output_path(path: Path) -> str:
+    """Format an output path relative to the repo root when possible."""
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(resolved)
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers (lazy-imported to keep --list-* fast)
 # ---------------------------------------------------------------------------
@@ -183,12 +211,12 @@ def run_vp(args: argparse.Namespace) -> dict:
         filepath = output_dir / f"{fig_name}.png"
         fig.savefig(filepath, dpi=300, bbox_inches="tight")
         size_kb = filepath.stat().st_size / 1024
-        print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+        print(f"    Saved: {format_output_path(filepath)} ({size_kb:.1f} KB)")
 
     metrics_path = output_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
+    print(f"    Saved: {format_output_path(metrics_path)}")
 
     plt.close("all")
     return metrics
@@ -204,6 +232,7 @@ def run_inverse(args: argparse.Namespace) -> dict:
 
     from pde_opt.examples import get_example, create_network_from_config
     from pde_opt.examples.examples import ARCHITECTURE_CONFIGS
+    from pde_opt.problems import HELMHOLTZ_PROFILES
     from pde_opt.utils.plotting import plot_coefficient_recovery
 
     print(f"JAX backend: {jax.default_backend()}  |  devices: {jax.devices()}")
@@ -233,6 +262,11 @@ def run_inverse(args: argparse.Namespace) -> dict:
     ex_kwargs = {}
 
     if args.example == "helmholtz":
+        if args.profile is not None and args.profile not in HELMHOLTZ_PROFILES:
+            valid = ", ".join(HELMHOLTZ_PROFILES)
+            print(f"Error: unknown Helmholtz profile '{args.profile}'")
+            print(f"Available: {valid}")
+            sys.exit(1)
         if args.k is not None:
             ex_kwargs["k"] = args.k * jnp.pi
         if args.nx is not None:
@@ -295,6 +329,8 @@ def run_inverse(args: argparse.Namespace) -> dict:
         run_kwargs["learning_rate"] = args.lr
     if hasattr(args, 'k_continuation') and args.k_continuation:
         run_kwargs["k_continuation"] = True
+    if getattr(args, "k_stages", None) is not None:
+        run_kwargs["k_stages"] = args.k_stages
 
     t0 = time.perf_counter()
     params, losses, field_pred, field_true = ex.run(**run_kwargs)
@@ -302,6 +338,16 @@ def run_inverse(args: argparse.Namespace) -> dict:
 
     # ---- Metrics ----
     rel_l2 = float(jnp.linalg.norm(field_pred - field_true) / jnp.linalg.norm(field_true))
+    resolved_k_stages = None
+    if args.example == "helmholtz" and args.k_continuation:
+        target_multiple = float(ex.k_wavenum / jnp.pi)
+        if args.k_stages is None:
+            resolved_k_stages = [float(k) for k in range(1, int(round(target_multiple)) + 1)]
+        else:
+            resolved_k_stages = list(args.k_stages)
+            if abs(resolved_k_stages[-1] - target_multiple) > 1e-8:
+                resolved_k_stages.append(target_multiple)
+
     metrics = {
         "example": args.example,
         "mode": mode,
@@ -311,6 +357,17 @@ def run_inverse(args: argparse.Namespace) -> dict:
         "training_time_seconds": round(elapsed, 1),
         "max_iter": args.max_iter,
     }
+    if args.example == "helmholtz":
+        metrics.update({
+            "profile": ex.profile,
+            "k_multiple_of_pi": float(ex.k_wavenum / jnp.pi),
+            "nx": ex.grid_params["nx"],
+            "ny": ex.grid_params["ny"],
+            "seed": args.seed if args.seed is not None else 42,
+            "regularization": float(ex.regularization),
+            "k_continuation": bool(args.k_continuation),
+            "k_stages": resolved_k_stages,
+        })
 
     print(f"\n  Results ({elapsed:.1f}s):")
     print(f"    Final loss:         {metrics['final_loss']:.6e}")
@@ -344,20 +401,23 @@ def run_inverse(args: argparse.Namespace) -> dict:
 
     # Save figures
     arch_label = arch_name or "default"
-    mode_label = mode
-    output_dir = args.output_dir / args.example / f"{arch_label}_{mode_label}"
+    mode_label = mode + ("_kcont" if getattr(args, "k_continuation", False) else "")
+    if args.example == "helmholtz":
+        output_dir = args.output_dir / args.example / ex.profile / f"{arch_label}_{mode_label}"
+    else:
+        output_dir = args.output_dir / args.example / f"{arch_label}_{mode_label}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for fig_name, fig in figures.items():
         filepath = output_dir / f"{fig_name}.png"
         fig.savefig(filepath, dpi=300, bbox_inches="tight")
         size_kb = filepath.stat().st_size / 1024
-        print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+        print(f"    Saved: {format_output_path(filepath)} ({size_kb:.1f} KB)")
 
     metrics_path = output_dir / "metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
+    print(f"    Saved: {format_output_path(metrics_path)}")
 
     plt.close("all")
     return metrics
@@ -535,13 +595,13 @@ def run(args: argparse.Namespace) -> dict:
             filepath = output_dir / f"{fig_name}.png"
             fig.savefig(filepath, dpi=300, bbox_inches="tight")
             size_kb = filepath.stat().st_size / 1024
-            print(f"    Saved: {filepath.resolve().relative_to(PROJECT_ROOT)} ({size_kb:.1f} KB)")
+            print(f"    Saved: {format_output_path(filepath)} ({size_kb:.1f} KB)")
 
         # Save metrics json alongside the figures
         metrics_path = output_dir / "metrics.json"
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
-        print(f"    Saved: {metrics_path.resolve().relative_to(PROJECT_ROOT)}")
+        print(f"    Saved: {format_output_path(metrics_path)}")
 
         plt.close("all")
     else:
@@ -554,7 +614,7 @@ def run(args: argparse.Namespace) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Run PDE-constrained optimization examples with configurable architecture, problem, and solver.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -601,8 +661,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mode", default=None, choices=["nn", "grid"],
                     help="Parameterization mode for inverse examples (default: nn)")
     p.add_argument("--profile", default=None,
-                    help="Coefficient profile: gaussian_lens/circular_inclusion (helmholtz), "
-                         "layered (fwi), sinusoidal (diffusion)")
+                    help="Coefficient profile: gaussian_lens/double_lens/circular_inclusion/layered (helmholtz), "
+                         "layered/anomaly (fwi), sinusoidal/layered/smooth_bump (diffusion)")
     p.add_argument("--k", type=float, default=None,
                     help="Wavenumber k in multiples of pi (e.g. --k 5 means k=5*pi)")
     p.add_argument("--ny", type=int, default=None,
@@ -614,7 +674,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--peak-freq", type=float, default=None,
                     help="Ricker wavelet peak frequency for FWI (default: 8.0)")
     p.add_argument("--k-continuation", action="store_true",
-                    help="Use frequency continuation for Helmholtz (train from k=pi up to target k)")
+                    help="Use frequency continuation for Helmholtz (train from low k up to the target k)")
+    p.add_argument("--k-stages", default=None,
+                    help="Comma-separated Helmholtz continuation stages in multiples of pi "
+                         "(example: 1,2,3,4,5)")
 
     # Fourier-space specific (example 3.3-fourier)
     p.add_argument("--input-scheme", default=None, choices=["state_time", "state_only", "time_only"],
@@ -634,7 +697,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "results" / "runs",
                     help="Output directory for figures and metrics")
 
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def main() -> None:
@@ -653,6 +716,13 @@ def main() -> None:
             args.mode_budget = int(args.mode_budget)
         except ValueError:
             print(f"Error: --mode-budget must be an integer or 'full', got '{args.mode_budget}'")
+            sys.exit(1)
+
+    if args.k_stages is not None:
+        try:
+            args.k_stages = parse_k_stage_multipliers(args.k_stages)
+        except ValueError as exc:
+            print(f"Error: {exc}")
             sys.exit(1)
 
     run(args)

@@ -7,6 +7,13 @@ import jax.numpy as jnp
 from typing import Callable, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
+HELMHOLTZ_PROFILES = (
+    'gaussian_lens',
+    'double_lens',
+    'circular_inclusion',
+    'layered',
+)
+
 
 @dataclass
 class PDEProblem:
@@ -705,6 +712,9 @@ class HelmholtzInverseMedium2D(PDEProblem):
     """
 
     def __init__(self, k: float = 10 * jnp.pi, profile: str = 'gaussian_lens'):
+        if profile not in HELMHOLTZ_PROFILES:
+            valid = ", ".join(HELMHOLTZ_PROFILES)
+            raise ValueError(f"Unknown Helmholtz profile '{profile}'. Expected one of: {valid}")
         super().__init__(
             name="2D Helmholtz Inverse Medium",
             description="Recover refractive index from Helmholtz observations",
@@ -721,6 +731,11 @@ class HelmholtzInverseMedium2D(PDEProblem):
         if self.profile == 'gaussian_lens':
             # Smooth Gaussian anomaly centered at (0.5, 0.5)
             return 1.0 + 0.3 * jnp.exp(-((X - 0.5)**2 + (Y - 0.5)**2) / 0.02)
+        elif self.profile == 'double_lens':
+            # Harder smooth target with two offset Gaussian anomalies.
+            lens_1 = 0.22 * jnp.exp(-((X - 0.35)**2 + (Y - 0.40)**2) / 0.012)
+            lens_2 = 0.16 * jnp.exp(-((X - 0.70)**2 + (Y - 0.65)**2) / 0.020)
+            return 1.0 + lens_1 + lens_2
         elif self.profile == 'circular_inclusion':
             # Sharp circular inclusion
             r = jnp.sqrt((X - 0.5)**2 + (Y - 0.5)**2)
@@ -728,8 +743,7 @@ class HelmholtzInverseMedium2D(PDEProblem):
         elif self.profile == 'layered':
             # Horizontal layers
             return 1.0 + 0.3 * jnp.where(Y > 0.5, 1.0, 0.0)
-        else:
-            return jnp.ones_like(X)
+        raise ValueError(f"Unhandled Helmholtz profile '{self.profile}'")
 
     def source_field(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
         """Known source f(x,y). Returns flattened shape (nx*ny,)."""

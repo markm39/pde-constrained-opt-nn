@@ -2,6 +2,7 @@
 
 from pde_opt.problems.problems import (
     get_problem,
+    HELMHOLTZ_PROFILES,
     PDEProblem,
     Poisson1DScalar,
     Poisson1DVector,
@@ -22,6 +23,7 @@ from pde_opt.problems.vlasov_poisson import (
 
 __all__ = [
     'get_problem',
+    'HELMHOLTZ_PROFILES',
     'PDEProblem',
     'Poisson1DScalar',
     'Poisson1DVector',

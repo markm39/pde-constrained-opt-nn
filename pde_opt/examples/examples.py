@@ -1259,9 +1259,9 @@ class ExampleHelmholtzMedium(OptimizationExample):
             k_stages: Wavenumber multiples of pi for each stage (default: [1,2,3,4,5]).
                        The final stage uses self.k_wavenum regardless.
         """
-        if k_continuation and mode == 'nn':
+        if k_continuation:
             return self._run_k_continuation(
-                max_iter=max_iter, model=model,
+                max_iter=max_iter, mode=mode, model=model,
                 lr_schedule_type=lr_schedule_type, seed=seed,
                 learning_rate=learning_rate, k_stages=k_stages,
             )
@@ -1272,214 +1272,223 @@ class ExampleHelmholtzMedium(OptimizationExample):
             learning_rate=learning_rate,
         )
 
-    def _run_single(self, max_iter: int = 3000, mode: str = 'nn', model=None,
-                    lr_schedule_type: str = 'cosine', seed: int = 42,
-                    learning_rate: float | None = None,
-                    init_params=None):
-        """Run single-stage optimization (original behavior)."""
-        from pde_opt.solvers import Helmholtz2DFD
-
-        nx, ny = self.grid_params['nx'], self.grid_params['ny']
-        problem = get_problem(self.problem_name, k=self.k_wavenum, profile=self.profile)
-        solver = Helmholtz2DFD(nx=nx, ny=ny, k=self.k_wavenum)
-
-        n_spatial = nx * ny
-
-        # Generate observations with true refractive index
-        u_obs = problem.generate_observations(solver)
-        n_true = problem.true_refractive_index(solver.x_grid, solver.y_grid).ravel()
-        f_vec = problem.source_field(solver.x_grid, solver.y_grid)
-
-        key = jax.random.PRNGKey(seed)
-
-        if mode == 'grid':
-            # Direct grid parameterization: optimize raw values, n = 1 + softplus(raw)
-            raw_n = jnp.zeros(n_spatial)  # softplus(0) ~ 0.693, so n ~ 1.693
-
-            @jax.jit
-            def loss_fn(raw_n):
-                n_vec = 1.0 + jax.nn.softplus(raw_n)
-                u_pred = solver.solve(n_vec, f_vec)
-                data_loss = jnp.mean((u_pred - u_obs)**2)
-                reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
-                return data_loss + reg_loss, (data_loss, reg_loss)
-
-            params = raw_n
-        else:
-            # NN parameterization: NN(x, y) -> n(x, y)
-            if model is None:
-                model = create_neural_network([256, 256], 'tanh')
-
-            dummy = jnp.zeros((1, 2))
-            params = init_params if init_params is not None else model.init(key, dummy)
-
-            # Normalized coordinates
-            x_norm = 2.0 * solver.x_grid / solver.Lx - 1.0
-            y_norm = 2.0 * solver.y_grid / solver.Ly - 1.0
-            X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
-            xy_input = jnp.stack([X_norm.ravel(), Y_norm.ravel()], axis=1)
-
-            @jax.jit
-            def loss_fn(params):
-                n_raw = model.apply(params, xy_input)  # (n_spatial, 1) or (n_spatial,)
-                n_vec = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
-                u_pred = solver.solve(n_vec, f_vec)
-                data_loss = jnp.mean((u_pred - u_obs)**2)
-                reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
-                return data_loss + reg_loss, (data_loss, reg_loss)
-
-        # Optimizer
-        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
-        if lr_schedule_type == 'cosine':
-            lr_schedule = optax.warmup_cosine_decay_schedule(
-                init_value=0.0, peak_value=lr,
-                warmup_steps=int(0.05 * max_iter),
-                decay_steps=max_iter, end_value=1e-6,
-            )
-        else:
-            lr_schedule = optax.exponential_decay(
-                init_value=lr, transition_steps=max_iter, decay_rate=0.9,
-            )
-        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
-        opt_state = optimizer.init(params)
-
-        @jax.jit
-        def train_step(params, opt_state):
-            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-            updates, opt_state = optimizer.update(grads, opt_state, params)
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, loss, data_loss, reg_loss
-
-        losses = []
-        print(f"Helmholtz inverse medium | mode={mode} | k={self.k_wavenum/jnp.pi:.1f}*pi | grid={nx}x{ny}")
-        for i in range(max_iter):
-            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
-            losses.append(float(loss))
-            if i % 100 == 0:
-                print(f"  iter {i:4d} | loss={loss:.6e} | data={data_loss:.6e} | reg={reg_loss:.6e}")
-
-        # Extract final n(x,y)
-        if mode == 'grid':
-            n_final = 1.0 + jax.nn.softplus(params)
-        else:
-            n_raw = model.apply(params, xy_input)
-            n_final = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
-
-        # Metrics
-        rel_l2 = float(jnp.linalg.norm(n_final - n_true) / jnp.linalg.norm(n_true))
-        print(f"  Final relative L2 error in n: {rel_l2:.6f}")
-
-        return params, losses, n_final, n_true
-
-    def _run_k_continuation(self, max_iter: int = 500, model=None,
-                            lr_schedule_type: str = 'cosine', seed: int = 42,
-                            learning_rate: float | None = None,
-                            k_stages: list[float] | None = None):
-        """Run with frequency continuation: train from low k up to target k.
-
-        Trains the NN at progressively higher wavenumbers, reusing weights
-        from each stage as initialization for the next. This avoids
-        cycle-skipping at high k by starting from an easy low-frequency problem.
-
-        Args:
-            max_iter: Iterations per stage.
-            model: Optional pre-built Flax model.
-            lr_schedule_type: 'cosine' or 'exponential'.
-            seed: Random seed.
-            learning_rate: Override learning rate.
-            k_stages: Wavenumber multiples of pi for each stage.
-                       Default: [1, 2, 3, 4, 5] for k_target=5*pi.
-        """
-        from pde_opt.solvers import Helmholtz2DFD
-
-        nx, ny = self.grid_params['nx'], self.grid_params['ny']
-        k_target = self.k_wavenum
-        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
+    def _resolve_k_stages(self, k_stages: list[float] | None) -> list[float]:
+        """Normalize user-provided continuation stages and append the target if needed."""
+        target_multiple = float(self.k_wavenum / jnp.pi)
 
         if k_stages is None:
-            k_target_mult = int(round(float(k_target / jnp.pi)))
-            k_stages = list(range(1, k_target_mult + 1))
+            return [float(k) for k in range(1, int(round(target_multiple)) + 1)]
+
+        if len(k_stages) == 0:
+            raise ValueError("k_stages must contain at least one positive multiple of pi")
+
+        resolved = [float(k_mult) for k_mult in k_stages]
+        if any(k_mult <= 0.0 for k_mult in resolved):
+            raise ValueError("k_stages must be positive multiples of pi")
+        if any(curr <= prev for prev, curr in zip(resolved, resolved[1:])):
+            raise ValueError("k_stages must be strictly increasing")
+
+        if abs(resolved[-1] - target_multiple) > 1e-8:
+            resolved.append(target_multiple)
+
+        return resolved
+
+    def _build_stage_context(self, k_value: float) -> Dict[str, Any]:
+        """Construct the solver, observations, and coordinate features for one stage."""
+        from pde_opt.solvers import Helmholtz2DFD
+
+        nx, ny = self.grid_params['nx'], self.grid_params['ny']
+        problem = get_problem(self.problem_name, k=k_value, profile=self.profile)
+        solver = Helmholtz2DFD(nx=nx, ny=ny, k=k_value)
+
+        x_norm = 2.0 * solver.x_grid / solver.Lx - 1.0
+        y_norm = 2.0 * solver.y_grid / solver.Ly - 1.0
+        X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
+        xy_input = jnp.stack([X_norm.ravel(), Y_norm.ravel()], axis=1)
+
+        return {
+            "problem": problem,
+            "solver": solver,
+            "u_obs": problem.generate_observations(solver),
+            "f_vec": problem.source_field(solver.x_grid, solver.y_grid),
+            "xy_input": xy_input,
+            "n_true": problem.true_refractive_index(solver.x_grid, solver.y_grid).ravel(),
+        }
+
+    def _init_helmholtz_params(self, mode: str, n_spatial: int, model, seed: int, init_params=None):
+        """Initialize optimization parameters for one Helmholtz run."""
+        if mode == 'grid':
+            if init_params is not None:
+                return init_params, model
+            return jnp.zeros(n_spatial), model
 
         if model is None:
             model = create_neural_network([256, 256], 'tanh')
 
+        if init_params is not None:
+            return init_params, model
+
         key = jax.random.PRNGKey(seed)
         dummy = jnp.zeros((1, 2))
-        params = model.init(key, dummy)
+        return model.init(key, dummy), model
 
-        # True n at target k (for evaluation)
-        problem_target = get_problem(self.problem_name, k=k_target, profile=self.profile)
-        solver_target = Helmholtz2DFD(nx=nx, ny=ny, k=k_target)
-        n_true = problem_target.true_refractive_index(
-            solver_target.x_grid, solver_target.y_grid
-        ).ravel()
+    def _decode_refractive_index(self, params, mode: str, model, xy_input: jnp.ndarray) -> jnp.ndarray:
+        """Map trainable parameters to the physical refractive index field."""
+        if mode == 'grid':
+            return 1.0 + jax.nn.softplus(params)
 
-        all_losses = []
-        print(f"Helmholtz k-continuation | k_target={k_target/jnp.pi:.0f}*pi | "
-              f"stages={k_stages} | {max_iter} iters/stage | grid={nx}x{ny}")
-
-        for stage_idx, k_mult in enumerate(k_stages):
-            k_val = k_mult * jnp.pi
-            problem = get_problem(self.problem_name, k=k_val, profile=self.profile)
-            solver = Helmholtz2DFD(nx=nx, ny=ny, k=k_val)
-
-            u_obs = problem.generate_observations(solver)
-            f_vec = problem.source_field(solver.x_grid, solver.y_grid)
-
-            x_norm = 2.0 * solver.x_grid / solver.Lx - 1.0
-            y_norm = 2.0 * solver.y_grid / solver.Ly - 1.0
-            X_norm, Y_norm = jnp.meshgrid(x_norm, y_norm, indexing='ij')
-            xy_input = jnp.stack([X_norm.ravel(), Y_norm.ravel()], axis=1)
-
-            @jax.jit
-            def loss_fn(params):
-                n_raw = model.apply(params, xy_input)
-                n_vec = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
-                u_pred = solver.solve(n_vec, f_vec)
-                data_loss = jnp.mean((u_pred - u_obs)**2)
-                reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
-                return data_loss + reg_loss, (data_loss, reg_loss)
-
-            # Fresh optimizer per stage (LR schedule resets)
-            if lr_schedule_type == 'cosine':
-                lr_schedule = optax.warmup_cosine_decay_schedule(
-                    init_value=0.0, peak_value=lr,
-                    warmup_steps=int(0.05 * max_iter),
-                    decay_steps=max_iter, end_value=1e-6,
-                )
-            else:
-                lr_schedule = optax.exponential_decay(
-                    init_value=lr, transition_steps=max_iter, decay_rate=0.9,
-                )
-            optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
-            opt_state = optimizer.init(params)
-
-            @jax.jit
-            def train_step(params, opt_state):
-                (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(
-                    loss_fn, has_aux=True
-                )(params)
-                updates, opt_state = optimizer.update(grads, opt_state, params)
-                params = optax.apply_updates(params, updates)
-                return params, opt_state, loss, data_loss, reg_loss
-
-            print(f"  Stage {stage_idx+1}/{len(k_stages)}: k={k_mult:.0f}*pi")
-            for i in range(max_iter):
-                params, opt_state, loss, data_loss, reg_loss = train_step(
-                    params, opt_state
-                )
-                all_losses.append(float(loss))
-                if i % 100 == 0:
-                    print(f"    iter {i:4d} | loss={loss:.6e} | "
-                          f"data={data_loss:.6e} | reg={reg_loss:.6e}")
-
-        # Extract final n(x,y) and evaluate against true n at target k
         n_raw = model.apply(params, xy_input)
-        n_final = 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
-        rel_l2 = float(jnp.linalg.norm(n_final - n_true) / jnp.linalg.norm(n_true))
+        return 1.0 + jax.nn.softplus(jnp.ravel(n_raw))
+
+    def _create_helmholtz_optimizer(self, max_iter: int, lr_schedule_type: str,
+                                    learning_rate: float | None):
+        """Create the optimizer used for both direct runs and continuation stages."""
+        lr = learning_rate if learning_rate is not None else self.optimizer_config['learning_rate']
+
+        if lr_schedule_type == 'cosine':
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=0.0,
+                peak_value=lr,
+                warmup_steps=int(0.05 * max_iter),
+                decay_steps=max_iter,
+                end_value=1e-6,
+            )
+        else:
+            lr_schedule = optax.exponential_decay(
+                init_value=lr,
+                transition_steps=max_iter,
+                decay_rate=0.9,
+            )
+
+        return optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr_schedule))
+
+    def _run_helmholtz_stage(self, params, mode: str, model, stage_context: Dict[str, Any],
+                             max_iter: int, lr_schedule_type: str,
+                             learning_rate: float | None, log_prefix: str = ""):
+        """Run one optimization stage and return updated parameters plus the loss history."""
+        solver = stage_context["solver"]
+        u_obs = stage_context["u_obs"]
+        f_vec = stage_context["f_vec"]
+        xy_input = stage_context["xy_input"]
+
+        @jax.jit
+        def loss_fn(stage_params):
+            n_vec = self._decode_refractive_index(stage_params, mode, model, xy_input)
+            u_pred = solver.solve(n_vec, f_vec)
+            data_loss = jnp.mean((u_pred - u_obs)**2)
+            reg_loss = self.regularization * jnp.mean((n_vec - 1.0)**2)
+            return data_loss + reg_loss, (data_loss, reg_loss)
+
+        optimizer = self._create_helmholtz_optimizer(
+            max_iter=max_iter,
+            lr_schedule_type=lr_schedule_type,
+            learning_rate=learning_rate,
+        )
+        opt_state = optimizer.init(params)
+
+        @jax.jit
+        def train_step(stage_params, stage_opt_state):
+            (loss, (data_loss, reg_loss)), grads = jax.value_and_grad(
+                loss_fn, has_aux=True
+            )(stage_params)
+            updates, stage_opt_state = optimizer.update(grads, stage_opt_state, stage_params)
+            stage_params = optax.apply_updates(stage_params, updates)
+            return stage_params, stage_opt_state, loss, data_loss, reg_loss
+
+        losses = []
+        for i in range(max_iter):
+            params, opt_state, loss, data_loss, reg_loss = train_step(params, opt_state)
+            losses.append(float(loss))
+            if i % 100 == 0:
+                print(f"{log_prefix}iter {i:4d} | loss={loss:.6e} | "
+                      f"data={data_loss:.6e} | reg={reg_loss:.6e}")
+
+        return params, losses
+
+    def _run_single(self, max_iter: int = 3000, mode: str = 'nn', model=None,
+                    lr_schedule_type: str = 'cosine', seed: int = 42,
+                    learning_rate: float | None = None):
+        """Run a single optimization stage at the target wavenumber."""
+        nx, ny = self.grid_params['nx'], self.grid_params['ny']
+        stage_context = self._build_stage_context(self.k_wavenum)
+        params, model = self._init_helmholtz_params(
+            mode=mode,
+            n_spatial=nx * ny,
+            model=model,
+            seed=seed,
+        )
+
+        print(f"Helmholtz inverse medium | mode={mode} | profile={self.profile} | "
+              f"k={self.k_wavenum/jnp.pi:.1f}*pi | grid={nx}x{ny}")
+        params, losses = self._run_helmholtz_stage(
+            params=params,
+            mode=mode,
+            model=model,
+            stage_context=stage_context,
+            max_iter=max_iter,
+            lr_schedule_type=lr_schedule_type,
+            learning_rate=learning_rate,
+            log_prefix="  ",
+        )
+
+        n_final = self._decode_refractive_index(
+            params,
+            mode=mode,
+            model=model,
+            xy_input=stage_context["xy_input"],
+        )
+        rel_l2 = float(jnp.linalg.norm(n_final - stage_context["n_true"]) /
+                       jnp.linalg.norm(stage_context["n_true"]))
         print(f"  Final relative L2 error in n: {rel_l2:.6f}")
 
-        return params, all_losses, n_final, n_true
+        return params, losses, n_final, stage_context["n_true"]
+
+    def _run_k_continuation(self, max_iter: int = 500, mode: str = 'nn', model=None,
+                            lr_schedule_type: str = 'cosine', seed: int = 42,
+                            learning_rate: float | None = None,
+                            k_stages: list[float] | None = None):
+        """Run stagewise frequency continuation for either NN or grid parameterization."""
+        nx, ny = self.grid_params['nx'], self.grid_params['ny']
+        stage_multipliers = self._resolve_k_stages(k_stages)
+        target_context = self._build_stage_context(self.k_wavenum)
+        params, model = self._init_helmholtz_params(
+            mode=mode,
+            n_spatial=nx * ny,
+            model=model,
+            seed=seed,
+        )
+
+        all_losses = []
+        print(f"Helmholtz k-continuation | mode={mode} | profile={self.profile} | "
+              f"k_target={self.k_wavenum/jnp.pi:.0f}*pi | stages={stage_multipliers} | "
+              f"{max_iter} iters/stage | grid={nx}x{ny}")
+
+        for stage_idx, k_mult in enumerate(stage_multipliers):
+            stage_context = self._build_stage_context(k_mult * jnp.pi)
+            print(f"  Stage {stage_idx+1}/{len(stage_multipliers)}: k={k_mult:g}*pi")
+            params, stage_losses = self._run_helmholtz_stage(
+                params=params,
+                mode=mode,
+                model=model,
+                stage_context=stage_context,
+                max_iter=max_iter,
+                lr_schedule_type=lr_schedule_type,
+                learning_rate=learning_rate,
+                log_prefix="    ",
+            )
+            all_losses.extend(stage_losses)
+
+        n_final = self._decode_refractive_index(
+            params,
+            mode=mode,
+            model=model,
+            xy_input=target_context["xy_input"],
+        )
+        rel_l2 = float(jnp.linalg.norm(n_final - target_context["n_true"]) /
+                       jnp.linalg.norm(target_context["n_true"]))
+        print(f"  Final relative L2 error in n: {rel_l2:.6f}")
+
+        return params, all_losses, n_final, target_context["n_true"]
 
 
 class ExampleWaveInversion(OptimizationExample):
